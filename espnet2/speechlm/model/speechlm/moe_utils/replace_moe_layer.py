@@ -121,99 +121,128 @@ class Qwen3MoeSparseMoeBlock_DeepSpeed_EP(DeepSpeed_MoE):
         self.ep_rank = dist.get_rank(group=self.ep_group)
 
     def forward(self, hidden_states: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass through expert-parallel MoE layer.
-
-        Performs routing, expert computation with all-to-all communication,
-        and combines expert outputs. Experts are distributed across processes
-        and communication happens via DeepSpeed all-to-all operations.
+        """Forward pass with memory-efficient sparse dispatch.
 
         Args:
-            hidden_states: Input tensor of shape [batch, seq_len, hidden_dim]
+            hidden_states: Input tensor [batch, seq_len, hidden_dim]
 
         Returns:
-            Tuple of:
-                - Output hidden states [batch, seq_len, hidden_dim]
-                - Router logits for auxiliary loss computation
+            Tuple of (output hidden states, router logits)
         """
         batch_size, sequence_length, hidden_dim = hidden_states.size()
-        num_token = batch_size * sequence_length
-        hidden_states = hidden_states.view(num_token, hidden_dim)
+        num_tokens = batch_size * sequence_length
+        hidden_states = hidden_states.view(num_tokens, hidden_dim)
 
-        # (1) router forward and dispatch
+        # Router and sparse dispatch preparation
         router_logits = self.gate(hidden_states)
-        location_one_hot, combine_weights = self.prepare_dispatch(router_logits)
+        dispatch_idx, topk_indices, topk_weights, positions, capacity = \
+            self.prepare_dispatch(router_logits)
 
-        # (2) hidden_states exchange and forward
-        expert_input = torch.matmul(
-            location_one_hot.type_as(hidden_states), hidden_states
+        # Gather tokens for each expert using sparse indexing
+        # Pad with zero row for empty slots (dispatch_idx == num_tokens)
+        hidden_padded = torch.cat([
+            hidden_states,
+            torch.zeros(1, hidden_dim, device=hidden_states.device, dtype=hidden_states.dtype)
+        ], dim=0)
+
+        expert_input = hidden_padded[dispatch_idx.view(-1)].view(
+            self.num_experts, capacity, hidden_dim
+        )
+
+        # All-to-all: dispatch tokens to their expert's rank
+        expert_input = expert_input.view(
+            self.ep_size, self.num_local_experts, capacity, hidden_dim
         )
         expert_input = _AllToAll.apply(self.ep_group, expert_input)
 
-        expert_input = expert_input.reshape(
-            self.ep_size, self.num_local_experts, -1, hidden_dim
-        )
+        # Forward through local experts
         expert_input = expert_input.chunk(self.num_local_experts, dim=1)
         expert_output = torch.stack(
-            [e(h) for e, h in zip(self.experts, expert_input)], dim=1
+            [e(h.squeeze(1)) for e, h in zip(self.experts, expert_input)], dim=1
         )
-        expert_output = expert_output.reshape(
-            self.ep_size * self.num_local_experts, -1, hidden_dim
-        )
+        expert_output = expert_output.view(self.num_experts, capacity, hidden_dim)
+
+        # All-to-all: return outputs to original ranks
         expert_output = _AllToAll.apply(self.ep_group, expert_output)
 
-        # (3) recover the hidden states
-        hidden_states = torch.matmul(
-            combine_weights.reshape(num_token, -1).type_as(hidden_states),
-            expert_output.reshape(-1, hidden_dim),
+        # Combine: weighted sum of expert outputs back to tokens
+        output = torch.zeros(
+            num_tokens, hidden_dim,
+            device=hidden_states.device, dtype=hidden_states.dtype
         )
-        hidden_states = hidden_states.view(batch_size, sequence_length, hidden_dim)
-        return hidden_states, router_logits
+        expert_output_flat = expert_output.view(-1, hidden_dim)
 
-    @torch.no_grad()
+        for k in range(self.top_k):
+            expert_k = topk_indices[:, k]
+            pos_k = positions[:, k]
+            weight_k = topk_weights[:, k:k+1]
+
+            linear_idx = expert_k * capacity + pos_k
+            gathered = expert_output_flat[linear_idx]
+            output += weight_k.type_as(output) * gathered
+
+        return output.view(batch_size, sequence_length, hidden_dim), router_logits
+
     def prepare_dispatch(
         self, logits: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Prepare dispatch tensors for expert routing.
-
-        Computes top-k routing, creates one-hot dispatch tensors, and
-        calculates combine weights. All operations are performed in FP32
-        for numerical stability.
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, int]:
+        """Prepare sparse dispatch tensors for expert routing.
 
         Args:
-            logits: Router output logits [num_tokens, num_experts]
+            logits: Router logits [num_tokens, num_experts]
 
         Returns:
             Tuple of:
-                - location_one_hot: Dispatch tensor [num_experts, capacity, num_tokens]
-                - combine_weights: Weight tensor [num_tokens, num_experts, capacity]
+                - dispatch_idx: [num_experts, capacity] token IDs per slot
+                - topk_indices: [num_tokens, top_k] expert IDs per token
+                - topk_weights: [num_tokens, top_k] routing weights (with gradients)
+                - positions: [num_tokens, top_k] position in expert buffer
+                - capacity: max tokens per expert
         """
+        num_tokens = logits.size(0)
+        device = logits.device
 
-        # (1) softmax and top_k
+        # Top-k routing - keep gradients for routing weights
         prob = F.softmax(logits, dim=1, dtype=torch.float)
-        topk_weights, topk_index = torch.topk(prob, self.top_k, dim=1)
+        topk_weights, topk_indices = torch.topk(prob, self.top_k, dim=1)
         if self.norm_topk_prob:
             topk_weights = topk_weights / topk_weights.sum(dim=1, keepdim=True)
 
-        # (2) bool and weight mask
-        masked_weights = torch.zeros_like(prob).scatter_(1, topk_index, topk_weights)
-        masked_bool = masked_weights.bool()
+        # Everything below is index computation - no gradients needed
+        with torch.no_grad():
+            flat_expert_indices = topk_indices.view(-1)
+            expert_counts = torch.bincount(flat_expert_indices, minlength=self.num_experts)
+            capacity = expert_counts.max()
+            dist.all_reduce(capacity, op=dist.ReduceOp.MAX, group=self.ep_group)
+            capacity = capacity.item()
 
-        # (3) find capacity
-        capacity = torch.max(torch.sum(masked_bool, dim=0))
-        dist.all_reduce(capacity, op=dist.ReduceOp.MAX, group=self.ep_group)
-        # Keep position 0 as meaningless in later one-hot op
-        capacity += 1
+            # Compute positions within each expert's buffer using vectorized ops
+            sorted_expert_idx, sort_perm = torch.sort(flat_expert_indices, stable=True)
+            arange = torch.arange(1, len(sorted_expert_idx) + 1, device=device, dtype=torch.long)
 
-        # (4) one-hot location
-        location = torch.cumsum(masked_bool, dim=0)
-        location = location * masked_bool
-        location_one_hot = F.one_hot(location, capacity).float()
-        combine_weights = masked_weights.unsqueeze(2) * location_one_hot
-        location_one_hot = location_one_hot.permute(1, 2, 0)
+            # Find segment boundaries and compute positions
+            changes = torch.cat([
+                torch.ones(1, dtype=torch.bool, device=device),
+                sorted_expert_idx[1:] != sorted_expert_idx[:-1]
+            ])
+            segment_starts = arange * changes
+            segment_start_cummax = torch.cummax(segment_starts, dim=0)[0]
+            positions_sorted = arange - segment_start_cummax
 
-        # Returns: [num_experts, capacity, num_tokens],
-        #          [num_token, num_experts, capacity]
-        return location_one_hot, combine_weights
+            # Unsort to original order
+            positions = torch.zeros_like(flat_expert_indices)
+            positions[sort_perm] = positions_sorted
+            positions = positions.view(num_tokens, self.top_k)
+
+            # Build dispatch index (num_tokens as padding for empty slots)
+            dispatch_idx = torch.full(
+                (self.num_experts, capacity), num_tokens, dtype=torch.long, device=device
+            )
+            linear_indices = topk_indices * capacity + positions
+            token_ids = torch.arange(num_tokens, device=device).unsqueeze(1).expand(-1, self.top_k)
+            dispatch_idx.view(-1).scatter_(0, linear_indices.view(-1), token_ids.reshape(-1))
+
+        return dispatch_idx, topk_indices, topk_weights, positions, capacity
 
 
 def replace_moe_layer(
@@ -246,7 +275,6 @@ def replace_moe_layer(
             if isinstance(child, original_cls):
                 new_child = ep_cls(child, ep_size)
                 setattr(module, name, new_child)
-                # del child
             else:
                 recursive_replace(child, full_name)
 
@@ -262,5 +290,7 @@ replace_qwen3_moe_layer = partial(
 )
 
 __all__ = [
+    "Qwen3MoeSparseMoeBlock_DeepSpeed_EP",
+    "replace_moe_layer",
     "replace_qwen3_moe_layer",
 ]
