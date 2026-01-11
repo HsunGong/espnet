@@ -73,7 +73,7 @@ def build_parallel_hf_class(model_hf_tag):
             """
             # (1) Load the base model using parent's from_pretrained
             model = super(ParallelLLM, cls).from_pretrained(
-                "./" + pretrained_model_name_or_path.replace("/", "-"), **kwargs
+                pretrained_model_name_or_path, **kwargs
             )
 
             # (2) Rebuild embedding tables for multimodal vocabulary
@@ -222,7 +222,11 @@ def build_parallel_hf_class(model_hf_tag):
             # Add stream embeddings to create stream-specific representations
             # Shape: [batch, seq, hidden] -> [batch, seq, streams, hidden]
             hidden_states = output.last_hidden_state.unsqueeze(2)
-            stream_emb = self.stream_emb.weight.tile(1, 1, 1, 1)
+            # Convert DTensor to regular tensor for in-place operations
+            stream_weight = self.stream_emb.weight
+            if hasattr(stream_weight, "full_tensor"):
+                stream_weight = stream_weight.full_tensor()
+            stream_emb = stream_weight.tile(1, 1, 1, 1)
             stream_emb[:, :, 0] = 0.0  # First stream uses base representation
             hidden_states = hidden_states + stream_emb
 
@@ -353,6 +357,11 @@ def build_parallel_hf_class(model_hf_tag):
             assert input_ids.size() == loss_mask.size()
             assert hidden_states.size()[:3] == loss_mask.size()
 
+            # Convert DTensor to regular tensor for matmul operations
+            lm_head_weight = self.lm_head.weight
+            if hasattr(lm_head_weight, "full_tensor"):
+                lm_head_weight = lm_head_weight.full_tensor()
+
             # Shift for next-token prediction
             hidden_states = hidden_states[:, :-1]
             input_ids = input_ids[:, 1:]
@@ -368,7 +377,7 @@ def build_parallel_hf_class(model_hf_tag):
             this_mask[:, :, 0] = True
 
             this_logits = hidden_states[this_mask]
-            this_logits = torch.matmul(this_logits, self.lm_head.weight.T)
+            this_logits = torch.matmul(this_logits, lm_head_weight.T)
             this_targets = input_ids[this_mask]
 
             this_loss = torch.nn.functional.cross_entropy(
@@ -393,7 +402,7 @@ def build_parallel_hf_class(model_hf_tag):
                 # Compute loss only for vocabulary subset [start:end]
                 this_logits = hidden_states[:, :, 1:][this_mask]
                 this_logits = torch.matmul(
-                    this_logits, self.lm_head.weight[start:end].T
+                    this_logits, lm_head_weight[start:end].T
                 )
                 # Adjust targets to interval-relative indices
                 this_targets = residual_ids[this_mask] - start

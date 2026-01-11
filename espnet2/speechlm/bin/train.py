@@ -19,6 +19,7 @@ import yaml
 from espnet2.speechlm.dataloader.iterator import DataIteratorFactory
 from espnet2.speechlm.model import _all_job_types
 from espnet2.speechlm.trainer.deepspeed_trainer import DeepSpeedTrainer
+from espnet2.speechlm.trainer.titan_trainer import TitanTrainer
 
 
 def get_parser() -> argparse.ArgumentParser:
@@ -157,12 +158,25 @@ def main():
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Load config early to determine trainer type
+    with open(args.train_config, "r") as f:
+        train_config = yaml.safe_load(f)
+
+    trainer_type = train_config.get("trainer", {}).get("type", "deepspeed")
+
     # (1) Setup distributed training first to get rank info
     # Get local_rank from environment variable (set by torchrun) if not provided via CLI
     if args.local_rank is None:
         args.local_rank = int(os.environ.get("LOCAL_RANK", 0))
     torch.cuda.set_device(args.local_rank)
-    deepspeed.init_distributed()
+
+    # Initialize distributed - different approach for each trainer type
+    if trainer_type == "deepspeed":
+        deepspeed.init_distributed()
+    else:
+        # For TorchTitan, use standard PyTorch distributed init
+        if not torch.distributed.is_initialized():
+            torch.distributed.init_process_group(backend="nccl")
 
     assert torch.distributed.is_initialized()
     rank = torch.distributed.get_rank()
@@ -191,10 +205,9 @@ def main():
     logger.info(f"World size: {world_size}")
     logger.info(f"Output directory: {args.output_dir}")
 
-    # (3) Initialize job template
-    with open(args.train_config, "r") as f:
-        train_config = yaml.safe_load(f)
+    # (3) Initialize job template (config already loaded above for trainer type detection)
     logger.info(f"Loaded training config from: {args.train_config}")
+    logger.info(f"Using trainer type: {trainer_type}")
 
     # Copy train config to output directory for reproducibility
     if rank == 0:
@@ -275,8 +288,8 @@ def main():
         f"project={args.wandb_project}, name={wandb_name}"
     )
 
-    # (7) Initialize DeepSpeed trainer and train
-    trainer = DeepSpeedTrainer(
+    # (7) Initialize trainer and train
+    trainer_kwargs = dict(
         train_data_factory=train_iterator_factory,
         valid_data_factories=valid_iterator_factories,
         model=model,
@@ -284,6 +297,17 @@ def main():
         output_dir=args.output_dir,
         trainer_args=train_config["trainer"],
     )
+
+    if trainer_type == "deepspeed":
+        trainer = DeepSpeedTrainer(**trainer_kwargs)
+    elif trainer_type == "titan":
+        trainer = TitanTrainer(**trainer_kwargs)
+    else:
+        raise ValueError(
+            f"Unknown trainer type: {trainer_type}. "
+            f"Supported types: 'deepspeed', 'titan'"
+        )
+
     trainer.run()
     wandb.finish()
 
