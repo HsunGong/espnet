@@ -1,11 +1,13 @@
 # Copyright 2025 Jinchuan Tian (Carnegie Mellon University)
 #  Apache 2.0  (http://www.apache.org/licenses/LICENSE-2.0)
 
-"""Parallelization utilities for HuggingFace Qwen3 models.
+"""Parallelization utilities for HuggingFace Qwen3 models (dense and MoE).
 
-This module provides FSDP2 and activation checkpointing for HuggingFace Qwen3
-models used in the SpeechLM framework. It follows TorchTitan's parallelization
-patterns adapted for the HuggingFace model structure.
+This module provides FSDP2, Expert Parallelism, and activation checkpointing
+for HuggingFace Qwen3 models used in the SpeechLM framework. It follows
+TorchTitan's parallelization patterns adapted for the HuggingFace model structure.
+
+The module auto-detects MoE models and applies Expert Parallelism when enabled.
 
 HuggingFace Qwen3 model structure:
     model.model.embed_tokens  - Token embeddings
@@ -17,6 +19,11 @@ Additional multimodal components (added by ParallelHFModel):
     model.multimodal_io_dict  - Dict of multimodal IO handlers
     model.adaptor             - Dict of linear adaptors for continuous modalities
     model.stream_emb          - Stream embeddings
+
+MoE-specific features (when MoE is detected):
+    - Converts HuggingFace MoE blocks to TorchTitan-compatible format
+    - Expert Parallelism using TorchTitan's ExpertParallel
+    - Separate FSDP mesh for expert parameters (edp_mesh)
 """
 
 import logging
@@ -26,9 +33,57 @@ import torch
 import torch.nn as nn
 from torch.distributed.fsdp import fully_shard, MixedPrecisionPolicy
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import checkpoint_wrapper
+from torch.distributed.tensor.parallel import parallelize_module
 from torchtitan.distributed import ParallelDims
+from torchtitan.distributed.expert_parallel import ExpertParallel
+from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeForCausalLM
+
+from espnet2.speechlm.model.speechlm.moe_utils.replace_moe_layer_titan import (
+    replace_qwen3_moe_layer_titan,
+)
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Expert Parallelism
+# =============================================================================
+
+
+def apply_moe_ep_qwen3(model: nn.Module, parallel_dims: ParallelDims) -> nn.Module:
+    """Apply Expert Parallelism to MoE layers.
+
+    Uses TorchTitan's ExpertParallel for DTensor-based expert sharding
+    and all-to-all token dispatch/combine.
+
+    Args:
+        model: Model with TorchTitan MoE layers
+        parallel_dims: ParallelDims with EP mesh
+
+    Returns:
+        Model with EP applied to MoE experts
+    """
+    ep_mesh = parallel_dims.get_optional_mesh("ep")
+    if ep_mesh is None:
+        logger.warning("EP mesh not available, skipping expert parallelism")
+        return model
+
+    # Apply EP to each MoE layer
+    for layer in model.model.layers:
+        if hasattr(layer, "moe_enabled") and layer.moe_enabled:
+            parallelize_module(
+                module=layer.mlp.experts,
+                device_mesh=ep_mesh,
+                parallelize_plan=ExpertParallel(),
+            )
+
+    logger.info(f"Applied Expert Parallelism (EP={parallel_dims.ep})")
+    return model
+
+
+# =============================================================================
+# Main Entry Point
+# =============================================================================
 
 
 def parallelize_qwen3_hf(
@@ -36,10 +91,11 @@ def parallelize_qwen3_hf(
     parallel_dims: ParallelDims,
     titan_config: Dict[str, Any],
 ) -> nn.Module:
-    """Apply parallelization to HuggingFace Qwen3 model.
+    """Apply parallelization to HuggingFace Qwen3 model (dense or MoE).
 
     This is the main entry point for parallelizing HuggingFace Qwen3 models.
-    Currently supports FSDP/HSDP and activation checkpointing.
+    Supports FSDP/HSDP, activation checkpointing, and Expert Parallelism for MoE.
+    Automatically detects MoE models and applies appropriate parallelization.
 
     Args:
         model: HuggingFace Qwen3 model (possibly wrapped with multimodal components)
@@ -59,6 +115,9 @@ def parallelize_qwen3_hf(
     Returns:
         Parallelized model
     """
+    # Check if MoE with EP enabled
+    is_moe = isinstance(model, Qwen3MoeForCausalLM) and parallel_dims.ep_enabled
+
     # Apply torch.compile first (before activation checkpointing and FSDP)
     if titan_config.get("compile", False):
         model = apply_torch_compile_qwen3(model, titan_config)
@@ -67,9 +126,16 @@ def parallelize_qwen3_hf(
     if titan_config.get("activation_checkpoint", False):
         model = apply_activation_checkpoint_qwen3(model)
 
+    # Apply Expert Parallelism if MoE and EP enabled
+    if is_moe:
+        model = replace_qwen3_moe_layer_titan(model)
+        model.is_moe = True
+        model = apply_moe_ep_qwen3(model, parallel_dims)
+        logger.info("Applied MoE Expert Parallelism")
+
     # Apply FSDP2 wrapping
-    if parallel_dims.fsdp_enabled:
-        model = apply_fsdp_qwen3(model, parallel_dims, titan_config)
+    if parallel_dims.fsdp_enabled or is_moe:
+        model = apply_fsdp_qwen3(model, parallel_dims, titan_config, is_moe)
 
     return model
 
@@ -78,12 +144,14 @@ def apply_fsdp_qwen3(
     model: nn.Module,
     parallel_dims: ParallelDims,
     titan_config: Dict[str, Any],
+    is_moe: bool = False,
 ) -> nn.Module:
     """Apply FSDP2 to HuggingFace Qwen3 model structure.
 
     Wraps all model components with FSDP for full sharding:
     1. model.embed_tokens - vocabulary embedding
     2. model.layers - each transformer layer individually
+       (for MoE: experts sharded on edp_mesh first)
     3. model.norm - final RMSNorm
     4. lm_head - output projection
     5. multimodal_io_dict - multimodal IO handlers (each module in dict)
@@ -95,6 +163,7 @@ def apply_fsdp_qwen3(
         model: HuggingFace Qwen3 model to wrap with FSDP
         parallel_dims: TorchTitan ParallelDims with device meshes
         titan_config: Configuration dict
+        is_moe: Whether model has MoE layers (for expert sharding)
 
     Returns:
         FSDP-wrapped model
@@ -139,6 +208,21 @@ def apply_fsdp_qwen3(
         "reshard_after_forward": reshard_after_forward,
     }
 
+    # Get FSDP mesh for MoE experts (efsdp dimension)
+    if is_moe and parallel_dims.ep_enabled:
+        if parallel_dims.dp_replicate_enabled:
+            edp_mesh = parallel_dims.get_optional_mesh(["dp_replicate", "efsdp"])
+        else:
+            edp_mesh = parallel_dims.get_optional_mesh("efsdp")
+        moe_fsdp_config = {
+            "mesh": edp_mesh if edp_mesh is not None else dp_mesh,
+            "mp_policy": mp_policy,
+            "reshard_after_forward": reshard_after_forward,
+        }
+    else:
+        edp_mesh = None
+        moe_fsdp_config = None
+
     # 1. Shard input embeddings
     if hasattr(model, "model") and hasattr(model.model, "embed_tokens"):
         fully_shard(model.model.embed_tokens, **fsdp_config)
@@ -147,6 +231,10 @@ def apply_fsdp_qwen3(
     # 2. Shard each transformer layer individually
     if hasattr(model, "model") and hasattr(model.model, "layers"):
         for layer in model.model.layers:
+            # For MoE layers, first shard experts on edp_mesh
+            if is_moe and hasattr(layer, "moe_enabled") and layer.moe_enabled:
+                if hasattr(layer.mlp, "experts") and moe_fsdp_config is not None:
+                    fully_shard(layer.mlp.experts, **moe_fsdp_config)
             fully_shard(layer, **fsdp_config)
         logger.info(f"FSDP wrapped: {len(model.model.layers)} transformer layers")
 
@@ -188,25 +276,28 @@ def apply_fsdp_qwen3(
 
     # 9. Set up explicit prefetching to overlap communication with compute
     if hasattr(model, "model") and hasattr(model.model, "layers"):
-        _setup_fsdp_prefetching(model)
+        _setup_fsdp_prefetching(model, is_moe)
 
-    if parallel_dims.dp_replicate_enabled:
-        logger.info("Applied HSDP (Hybrid Sharded Data Parallel) to Qwen3 model")
-    else:
-        logger.info("Applied FSDP2 to Qwen3 model")
+    mode = "HSDP" if parallel_dims.dp_replicate_enabled else "FSDP2"
+    if is_moe:
+        mode += " with EP"
+    logger.info(f"Applied {mode} to Qwen3 model")
 
     return model
 
 
-def _setup_fsdp_prefetching(model: nn.Module) -> None:
+def _setup_fsdp_prefetching(model: nn.Module, is_moe: bool = False) -> None:
     """Set up explicit FSDP prefetching to overlap communication with compute.
 
     Configures each layer to prefetch the next layer's parameters during forward
     and the previous layer's parameters during backward. This hides FSDP
     all-gather latency behind compute.
 
+    For MoE models, also prefetches expert parameters.
+
     Args:
         model: FSDP-wrapped model with HuggingFace structure
+        is_moe: Whether model has MoE layers (for expert prefetching)
     """
     layers = list(model.model.layers)
     num_layers = len(layers)
@@ -214,16 +305,29 @@ def _setup_fsdp_prefetching(model: nn.Module) -> None:
     if num_layers == 0:
         return
 
+    def _get_prefetch_modules(layer, include_moe: bool = False):
+        """Get modules to prefetch for a layer."""
+        modules = [layer]
+        if include_moe and hasattr(layer, "moe_enabled") and layer.moe_enabled:
+            moe = layer.mlp if hasattr(layer, "mlp") else layer.moe
+            if hasattr(moe, "experts"):
+                modules.append(moe.experts)
+        return modules
+
     # Forward prefetching: each layer prefetches the next
     # embed_tokens -> first layer
     if hasattr(model.model, "embed_tokens"):
         if hasattr(model.model.embed_tokens, "set_modules_to_forward_prefetch"):
-            model.model.embed_tokens.set_modules_to_forward_prefetch([layers[0]])
+            model.model.embed_tokens.set_modules_to_forward_prefetch(
+                _get_prefetch_modules(layers[0], is_moe)
+            )
 
     # layer[i] -> layer[i+1]
     for i in range(num_layers - 1):
         if hasattr(layers[i], "set_modules_to_forward_prefetch"):
-            layers[i].set_modules_to_forward_prefetch([layers[i + 1]])
+            layers[i].set_modules_to_forward_prefetch(
+                _get_prefetch_modules(layers[i + 1], is_moe)
+            )
 
     # last layer -> norm + lm_head + stream_emb
     last_modules = []
@@ -240,12 +344,16 @@ def _setup_fsdp_prefetching(model: nn.Module) -> None:
     # lm_head -> last layer
     if hasattr(model, "lm_head"):
         if hasattr(model.lm_head, "set_modules_to_backward_prefetch"):
-            model.lm_head.set_modules_to_backward_prefetch([layers[-1]])
+            model.lm_head.set_modules_to_backward_prefetch(
+                _get_prefetch_modules(layers[-1], is_moe)
+            )
 
     # layer[i] -> layer[i-1]
     for i in range(num_layers - 1, 0, -1):
         if hasattr(layers[i], "set_modules_to_backward_prefetch"):
-            layers[i].set_modules_to_backward_prefetch([layers[i - 1]])
+            layers[i].set_modules_to_backward_prefetch(
+                _get_prefetch_modules(layers[i - 1], is_moe)
+            )
 
     # first layer -> embed_tokens
     if hasattr(model.model, "embed_tokens"):

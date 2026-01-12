@@ -25,6 +25,7 @@ from torch.distributed.checkpoint.state_dict import (
     set_optimizer_state_dict,
     StateDictOptions,
 )
+from torchtitan.distributed import utils as dist_utils
 
 from espnet2.speechlm.utils.data import to_device
 from espnet2.speechlm.utils.model_summary import model_summary
@@ -147,6 +148,10 @@ class TitanTrainer:
         logger.info(f"  FSDP enabled: {self.parallel_dims.fsdp_enabled}")
         logger.info(f"  dp_shard: {self.parallel_dims.dp_shard}")
         logger.info(f"  dp_replicate: {self.parallel_dims.dp_replicate}")
+        if self.parallel_dims.ep_enabled:
+            logger.info(f"  Expert Parallelism enabled: EP={self.parallel_dims.ep}")
+        if hasattr(self.model, 'is_moe') and self.model.is_moe:
+            logger.info("  MoE model detected - auxiliary loss will be computed")
 
     def _build_optimizer_scheduler(self):
         """Create optimizer and LR scheduler after parallelization."""
@@ -368,9 +373,11 @@ class TitanTrainer:
             # Backward pass
             out["loss"].backward()
 
-            # Gradient clipping
-            grad_norm = torch.nn.utils.clip_grad_norm_(
-                self.model.parameters(), self.max_norm
+            # Gradient clipping (use TorchTitan's version for EP support)
+            grad_norm = dist_utils.clip_grad_norm_(
+                self.model.parameters(),
+                self.max_norm,
+                ep_enabled=self.parallel_dims.ep_enabled,
             )
 
             # Optimizer step

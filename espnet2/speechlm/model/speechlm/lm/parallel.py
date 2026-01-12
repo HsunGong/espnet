@@ -212,11 +212,13 @@ def build_parallel_hf_class(model_hf_tag):
             position_ids = kwargs.get("position_ids", None)
 
             inputs_embeds = self._embed(input_ids, kwargs)
+            
 
             # Forward through base transformer model
             output = self.model(
                 inputs_embeds=inputs_embeds,
                 position_ids=position_ids,
+                output_router_logits=True,
             )
 
             # Add stream embeddings to create stream-specific representations
@@ -234,7 +236,7 @@ def build_parallel_hf_class(model_hf_tag):
                 input_ids=input_ids,
                 hidden_states=hidden_states,
                 loss_mask=loss_mask,
-                router_logits=output.get("router_logits", None),
+                router_logits=getattr(output, "router_logits", None),
             )
             return {"loss": loss, "stats": stats}
 
@@ -350,6 +352,9 @@ def build_parallel_hf_class(model_hf_tag):
                 hidden_states: Model outputs [batch, seq_len, streams, hidden_dim]
                 input_ids: Target tokens [batch, seq_len, streams]
                 loss_mask: Loss weights per token [batch, seq_len, streams]
+                router_logits: Tuple of router logits from MoE layers, each
+                    [batch * seq_len, num_experts]. Used to compute load
+                    balancing auxiliary loss.
 
             Returns:
                 Tuple of (loss tensor, stats dict with loss/accuracy metrics)
@@ -432,15 +437,15 @@ def build_parallel_hf_class(model_hf_tag):
                     if this_count > 0:
                         stats[f"acc_layer{n}"] = acc[:, :, n].sum() / this_count
 
-            # MoE load balance loss
+            # MoE load balance loss (computed from router_logits)
             if router_logits is not None and hasattr(self, "load_balancing_loss_func"):
-                moe_loss = self.load_balancing_loss_func(
+                aux_loss = self.load_balancing_loss_func(
                     router_logits,
-                    self.num_experts,
-                    self.num_experts_per_tok,
+                    self.config.num_experts,
+                    self.config.num_experts_per_tok,
                 )
-                loss += moe_loss * self.router_aux_loss_coef
-                stats["moe_loss"] = moe_loss
+                loss = loss + aux_loss * self.config.router_aux_loss_coef
+                stats["moe_balance_loss"] = aux_loss.clone().detach()
 
             return loss, stats
 
