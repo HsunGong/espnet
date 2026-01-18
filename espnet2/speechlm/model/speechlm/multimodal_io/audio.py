@@ -896,7 +896,7 @@ class ContinuousAudioIO(AbsIO):
 
             # Load full Qwen multimodal model
             full_model = model_class.from_pretrained(
-                "./" + self.encoder_hf_model_tag.replace("/", "-"),
+                self.encoder_hf_model_tag,
                 attn_implementation=self.attn_implementation,
                 torch_dtype=self.dtype,
             )

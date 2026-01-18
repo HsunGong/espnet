@@ -73,7 +73,7 @@ def build_parallel_hf_class(model_hf_tag):
             """
             # (1) Load the base model using parent's from_pretrained
             model = super(ParallelLLM, cls).from_pretrained(
-                "./" + pretrained_model_name_or_path.replace("/", "-"), **kwargs
+                pretrained_model_name_or_path, **kwargs
             )
 
             # (2) Rebuild embedding tables for multimodal vocabulary
