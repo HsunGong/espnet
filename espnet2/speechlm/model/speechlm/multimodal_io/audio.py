@@ -514,7 +514,14 @@ class DiscreteAudioIO(AbsIO):
         # Remove vocabulary offsets to get original token indices
         for stream_idx in range(self.codec_n_streams):
             global_stream_idx = self.ssl_n_streams + stream_idx
-            offset_start, _ = self._stream_intervals[global_stream_idx]
+            offset_start, offset_end = self._stream_intervals[global_stream_idx]
+
+            # NOTE(Jinchuan): Maybe need a warning if this triggers?
+            codec_codes[..., stream_idx] = torch.clip(
+                codec_codes[..., stream_idx],
+                min=offset_start + 1,
+                max=offset_end - 1,
+            )
 
             codec_codes[..., stream_idx] -= offset_start + 1
 

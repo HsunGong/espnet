@@ -71,18 +71,18 @@ class SpeechLMJobTemplate(AbsJobTemplate):
         # (1) Initial special token. We keep a fixed number of slots
         vocab_intervals = {"special_token": [(0, num_special_tokens)]}
         vocab = [
-            "<|pad|>",
-            "<|bos|>",
-            "<|eos|>",
-            "<|eot|>",
-            "<|system|>",
-            "<|user|>",
-            "<|assistant|>",
-            "<|text|>",
-            "<|audio|>",
-            "<|image|>",
-            "<|video|>",
-            "<|toolcall|>",
+            "<|pad|>", # 0
+            "<|bos|>", # 1
+            "<|eos|>", # 2
+            "<|eot|>", # 3
+            "<|system|>", # 4
+            "<|user|>", # 5
+            "<|assistant|>", # 6
+            "<|text|>", # 7
+            "<|audio|>", # 8
+            "<|image|>", # 9
+            "<|video|>", # 10
+            "<|toolcall|>", # 11
         ]
         while len(vocab) < num_special_tokens:
             vocab.append(f"<|unused_{len(vocab)}|>")
@@ -443,12 +443,25 @@ class SpeechLMPreprocessor:
                 raise ValueError(
                     "If dialogue exist, there should be no more other entries"
                 )
-            if not self.is_train:
-                assert all([msg[0] != "assistant" for msg in data_dict["dialogue"]]), (
-                    "during inference, input dialogue should not contain "
-                    "model output (assistant message)"
-                )
-            return data_dict["dialogue"]
+            messages = list()
+            for msg in data_dict["dialogue"]:
+                if msg[0] == "assistant" and not self.is_train:
+                    break
+
+                if msg[1] == "text":
+                    this_io = "text"
+                elif msg[1] == "audio":
+                    # User/system use input audio IO, assistant uses output audio IO
+                    if msg[0] == "user" or msg[0] == "system":
+                        this_io = self.audio_input
+                    else:
+                        this_io = self.audio_output
+                else:
+                    raise ValueError(f"Not supported modality in dialogue: {msg[1]}")
+                
+                msg = (msg[0], this_io, msg[2])
+                messages.append(msg)
+            return messages
         else:
             task_config = SPEECHLM_TASK_CONFIGS[task]
             messages = list()
@@ -472,6 +485,7 @@ class SpeechLMPreprocessor:
                 this_data = data_dict[entry]
                 message = (role, this_io, this_data)
                 messages.append(message)
+
             return messages
 
     def _apply_cfg(self, seq, loss_masks, conti_feats, messages):

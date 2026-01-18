@@ -577,6 +577,9 @@ def build_parallel_hf_class(model_hf_tag):
             prev_token[..., 1:] = 0
             _, cache = self._step(input_ids=prev_token, past_key_values=cache)
 
+            # TODO(Jinchuan): If this is for delay-interleaved audio, we should
+            # enforce it to have valid paddings here.
+
             hypo_lst = list()
             for idx, hypo in zip(finish_idx, hypos):
                 hypo = hypo[: idx + 1]
@@ -629,13 +632,18 @@ def build_parallel_hf_class(model_hf_tag):
 
             if input_ids is not None:
                 assert input_ids.size(2) == self.num_stream
-                input_embeds = self.model.embed_tokens(input_ids).sum(dim=2)
+                input_embeds = self.model.embed_tokens(input_ids)
+                input_embeds[..., 1:, :] = torch.where(
+                    (input_ids[..., 1:] == 0).unsqueeze(-1), 0.0, input_embeds[..., 1:, :]
+                )
+                input_embeds = input_embeds.sum(dim=2)
 
             output = self.model(
                 inputs_embeds=input_embeds,
                 past_key_values=past_key_values,
                 use_cache=True,
             )
+
             past_key_values = output.past_key_values
             hidden_states = output.last_hidden_state.unsqueeze(2)
             stream_emb = self.stream_emb.weight.tile(1, 1, 1, 1)
