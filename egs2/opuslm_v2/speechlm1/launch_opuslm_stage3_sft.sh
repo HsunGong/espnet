@@ -14,14 +14,16 @@ node_rank=0
 master_addr=localhost
 master_port=8888
 
+train_registered_specifier="audio_to_text:clotho_test"
+valid_registered_specifier="audio_to_text:clotho_test"
+
 train_registered_specifier="dialogue:gen_v1_300k_realistic dialogue:gen_v1_300k_imaginary"
-valid_registered_specifier="librispeech_dev"
 
 train_config=conf/train_stage3_qwen3.yaml
-resume_path=pretrained/step_300000/global_step299985/mp_rank_00_model_states.pt
+resume_path=exp/opuslm_v2_stage2_pretrain_base/checkpoints/step_350000
 
 stats_dir=exp/stats_qwen3
-exp_dir=exp/opuslm_v2_stage2_pretrain
+exp_dir=exp/opuslm_v2_stage3_sft_gen_v1_300k
 mkdir -p ${exp_dir}
 
 inference_config=conf/inference.yaml
@@ -43,6 +45,8 @@ if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
     --num-workers 88
 fi
 
+
+# 
 if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
   echo "Node rank: ${node_rank} launch"
 
