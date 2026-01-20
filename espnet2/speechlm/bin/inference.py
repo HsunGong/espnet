@@ -143,6 +143,7 @@ def load_checkpoint(model, checkpoint_path):
     return model
 
 
+@torch.no_grad()
 def inference_worker(
     rank: int,
     world_size: int,
@@ -178,7 +179,6 @@ def inference_worker(
     dtype = inference_config.get("dtype", "bfloat16")
     dtype = getattr(torch, dtype)
     model = model.to(device="cuda", dtype=dtype).eval()
-
     preprocessor = job_template.build_preprocessor()
 
     # Build data iterator with sharding

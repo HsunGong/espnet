@@ -177,7 +177,8 @@ class SpeechLMPreprocessor:
         self.audio_input = audio_input
         self.audio_output = audio_output
         self.loss_region = loss_region
-        self.batchfy_method = batchfy_method
+        # NOTE(Jinchuan): use pack only for training
+        self.batchfy_method = batchfy_method if is_train else "bucket"
         self.audio_cfg = audio_cfg
 
         # Use fixed batch length if using sequence pack during training
@@ -460,6 +461,8 @@ class SpeechLMPreprocessor:
                     raise ValueError(f"Not supported modality in dialogue: {msg[1]}")
                 
                 msg = (msg[0], this_io, msg[2])
+
+                print(f"msg: ",  msg, flush=True)
                 messages.append(msg)
             return messages
         else:
