@@ -2,7 +2,7 @@ job_type: speechlm
 
 multimodal_io:
     text:
-        tokenizer_name: Qwen/Qwen3-8B
+        tokenizer_name: Qwen/Qwen3-8B-Base
     discrete_audio:
         codec_choice: Xcodec
         codec_hf_model_tag: hf-audio/xcodec-hubert-general
@@ -18,7 +18,7 @@ multimodal_io:
 
 model:
     model_choice: parallel
-    model_hf_tag: Qwen/Qwen3-8B
+    model_hf_tag: Qwen/Qwen3-8B-Base
     model_conf:
         attn_implementation: flash_attention_3
         dtype: bfloat16
@@ -34,7 +34,7 @@ preprocessor:
 
 data_loading:
     batchfy_method: pack
-    batch_size: 15000
+    batch_size: 20000
     save_loader_state: false
     seed: 43
     num_workers: 6
@@ -43,5 +43,5 @@ trainer:
     deepspeed_config: conf/deepspeed_stage3.json
     freeze_param: [multimodal_io_dict.discrete_audio, multimodal_io_dict.continuous_audio]
     max_step: 700000
-    save_interval: 3823
+    save_interval: 4860
     log_interval: 1

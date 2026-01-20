@@ -17,18 +17,20 @@ master_port=8888
 train_registered_specifier="audio_to_text:clotho_test"
 valid_registered_specifier="audio_to_text:clotho_test"
 
-train_registered_specifier="dialogue:gen_v1_300k_realistic dialogue:gen_v1_300k_imaginary"
+train_registered_specifier="dialogue:gen_v1_realistic dialogue:gen_v1_imaginary"
+test_registered_specifier="dialogue:gen_v1_realistic"
 
-train_config=conf/train_stage3_qwen3.yaml
+train_config=conf/train_stage3_qwen3_base.yaml
 resume_path=exp/opuslm_v2_stage2_pretrain_base/checkpoints/step_350000
 
 stats_dir=exp/stats_qwen3
-exp_dir=exp/opuslm_v2_stage3_sft_gen_v1_300k
+exp_dir=exp/opuslm_v2_stage3_sft_gen_v1
 mkdir -p ${exp_dir}
 
 inference_config=conf/inference.yaml
 inference_step=10000
 inference_nj=1
+inference_workers=1
 
 . utils/parse_options.sh
 
@@ -76,16 +78,21 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
   inference_dir=${exp_dir}/inference/${inference_tag}_step_${inference_step}
   mkdir -p ${inference_dir}
 
-  inference_ckpt=${exp_dir}/checkpoints/step_${inference_step}/global_step${inference_step}/mp_rank_00_model_states.pt
+  inference_ckpt=(${exp_dir}/checkpoints/step_${inference_step}/global_step*/mp_rank_00_model_states.pt)
+  inference_ckpt=${inference_ckpt[0]}
 
   echo "Start model inference. Log at ${inference_dir}/logs/inference.*.log"
-  ${cuda_cmd} JOB=1:${inference_nj} ${inference_dir}/logs/inference.JOB.log \
-    ../../../espnet2/speechlm/bin/inference.py \
-      --rank JOB --world-size ${inference_nj} \
-      --train-config ${exp_dir}/train.yaml \
-      --inference-config ${inference_config} \
-      --model-checkpoint ${inference_ckpt} \
-      --output-dir ${inference_dir} \
-      --test-registered-specifier "${test_registered_specifier}" \
-      --num-worker 1
+  for specifier in ${test_registered_specifier}; do
+    echo "Test specifier: ${specifier}. Log at: ${inference_dir}/logs/inference_${specifier//:/_}.*.log"
+    ${cuda_cmd} --gpu 1 JOB=1:${inference_nj} ${inference_dir}/logs/inference_${specifier//:/_}.JOB.log \
+      ../../../espnet2/speechlm/bin/inference.py \
+        --rank JOB --world-size ${inference_nj} \
+        --train-config ${exp_dir}/train.yaml \
+        --inference-config ${inference_config} \
+        --model-checkpoint ${inference_ckpt} \
+        --output-dir ${inference_dir} \
+        --test-registered-specifier "${specifier}" \
+        --num-worker ${inference_workers} &
+  done; wait
+  
 fi

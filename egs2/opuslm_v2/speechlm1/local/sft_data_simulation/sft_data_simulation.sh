@@ -34,6 +34,12 @@ timeout=1200
 resume=true
 num_samples=-1  # -1 means process all samples
 
+# Stage 5 filtering thresholds
+min_score_realistic=3
+avg_score_realistic=3.5
+min_score_imaginary=2
+avg_score_imaginary=3.5
+
 log "$0 $*"
 . utils/parse_options.sh
 
@@ -53,6 +59,7 @@ mkdir -p "${output_dir}/stage1_user_requests"
 mkdir -p "${output_dir}/stage2_reasoning_traces"
 mkdir -p "${output_dir}/stage3_dialogues"
 mkdir -p "${output_dir}/stage4_quality_judge"
+mkdir -p "${output_dir}/stage5_filtered"
 
 # Resume flag
 resume_flag=""
@@ -185,5 +192,53 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
         --output_dir "${output_dir}/stage4_quality_judge"
 fi
 
+# Stage 5: Filter dialogues by quality scores
+if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
+    log "Stage 5: Filtering dialogues by quality scores"
+
+    for level in realistic imaginary; do
+        stage3_output="${output_dir}/stage3_dialogues/dialogues_${level}.jsonl"
+        stage4_output="${output_dir}/stage4_quality_judge/judge_${level}.jsonl"
+
+        if [ ! -f "${stage3_output}" ]; then
+            log "Warning: Stage 3 output not found for ${level}: ${stage3_output}"
+            continue
+        fi
+
+        if [ ! -f "${stage4_output}" ]; then
+            log "Warning: Stage 4 output not found for ${level}: ${stage4_output}"
+            continue
+        fi
+
+        # Get thresholds for this level
+        min_score_var="min_score_${level}"
+        avg_score_var="avg_score_${level}"
+
+        log "Stage 5: Filtering ${level} (min_score=${!min_score_var}, avg_score=${!avg_score_var})"
+
+        python3 local/sft_data_simulation/sft_filter_dialogues.py \
+            --dialogue_file "${stage3_output}" \
+            --judge_file "${stage4_output}" \
+            --output_dir "${output_dir}/stage5_filtered" \
+            --detail_level "${level}" \
+            --min_score "${!min_score_var}" \
+            --avg_score "${!avg_score_var}"
+
+        # Count results
+        stage5_output="${output_dir}/stage5_filtered/filtered_${level}.jsonl"
+        if [ -f "${stage5_output}" ]; then
+            count=$(wc -l < "${stage5_output}")
+            log "Stage 5 (${level}) completed: ${count} dialogues passed filtering"
+
+            # Prepare dataset JSON for training
+            dataset_json="${output_dir}/stage5_filtered/dataset_${level}.json"
+            log "Stage 5: Preparing dataset JSON for ${level}"
+            python3 ../../../espnet2/speechlm/bin/prepare_dataset_json.py \
+                --triplets "dialogue,${stage5_output},dialogue" \
+                --output_json "${dataset_json}"
+            log "Stage 5 (${level}): Dataset JSON saved to ${dataset_json}"
+        fi
+    done
+fi
 
 log "Successfully finished. [elapsed=${SECONDS}s]"

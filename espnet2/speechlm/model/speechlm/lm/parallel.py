@@ -439,19 +439,47 @@ def build_parallel_hf_class(model_hf_tag):
         @torch.no_grad()
         def inference(self, inference_config: dict, cache: list = None, **kwargs):
 
+            # (1) Prefill input_ids
+            input_ids = kwargs.get("seqs")
+            input_embeds = self._embed(input_ids, kwargs)
+            
+            # input_embeds = self._embed(input_ids, kwargs)
+            _, cache = self._step(
+                input_embeds=input_embeds,
+                past_key_values=cache,
+            )
+
             messages = []
+            num_msg = 0
+            enforce_modalities = inference_config.get("enforce_modality", [])
             while True:
-                # (1) predict token sequence
-                decoded_sequences, cache = self.inference_segment(
-                    inference_config,
-                    cache=cache,
-                    enforce_modality=None,
-                    **kwargs,
+                # (2.1) Prefill assistant token
+                logits, cache = self._step(
+                    input_ids=self.assistant_token,
+                    past_key_values=cache,
+                    mask=self.modality_mask,
                 )
 
-                # (2) detokenization
-                for seq, modality in decoded_sequences:
+                # (2.2) determine modality token and mask
+                try:
+                    modality = enforce_modalities[num_msg]
+                    modality_token = getattr(self, f"{modality}_token")
+                except:
+                    modality_token = logits.argmax(3)
+                    modality = modality_token.flatten()[0].item()
+                    modality = self.vocab[modality].replace("<|", "").replace("|>", "")
+                modality_mask = getattr(self, f"{modality}_mask")
 
+                # (2.3) predict token sequence
+                decoded_sequences, cache, logits = self.inference_segment(
+                    config=inference_config[modality],
+                    cache=cache,
+                    prev_token=modality_token,
+                    mask=modality_mask,
+                )
+
+                # (2.4) detokenization
+                for seq in decoded_sequences:
                     if (
                         seq[-1, 0] == self.eos_token_id
                         or seq[-1, 0] == self.eot_token_id
@@ -468,90 +496,63 @@ def build_parallel_hf_class(model_hf_tag):
                     msg = ["assistant", modality, content]
                     messages.append(msg)
 
-                # (3) Terminate when applicable
+                # (2.5) Terminate when applicable
                 if len(decoded_sequences) > 1:
                     break  # multi-segment decoding only supports batch size of 1
 
-                elif decoded_sequences[0][0][-1, 0] != self.eot_token_id:
+                elif decoded_sequences[0][-1, 0] != self.eot_token_id and num_msg >= len(enforce_modalities) - 1:
                     break  # decode next segment only when ending with <|eot|>
+                
+                num_msg += 1
 
             return messages, cache
 
         def inference_segment(
             self,
             config: dict,
-            cache: list = None,
-            enforce_modality: str = None,
-            **kwargs,
+            cache: list,
+            prev_token: torch.Tensor,
+            mask: torch.Tensor,
         ):
+            device = prev_token.device
 
-            # (1) Prefill, with assistant role token
-            input_ids = kwargs.get("seqs")
-            input_ids = torch.cat([input_ids, self.assistant_token], dim=1)
-            device = input_ids.device
-
-            input_embeds = self._embed(input_ids, kwargs)
-            logits, cache = self._step(
-                input_embeds=input_embeds,
-                past_key_values=cache,
-                mask=self.modality_mask,
-            )
-            logits = logits[:, -1:, :]
-
-            # (2) determine modality token and the corresponding mask
-            if enforce_modality is not None:
-                modality_token = getattr(self, f"{enforce_modality}_token")
-            else:
-                modality_token = logits.argmax(3)
-
-            modality = modality_token.flatten()[0].item()
-            modality = self.vocab[modality].replace("<|", "").replace("|>", "")
-            modality_mask = getattr(self, f"{modality}_mask")
-            if modality not in config:
-                raise ValueError(
-                    f"Try to predict {modality} modality "
-                    "But the corresponding inference config is missing."
-                )
-            this_config = config[modality]
-
-            # (3) preprocess for multi-hypothesis inference and CFG
+            # (1) preprocess for multi-hypothesis inference and CFG
             num_hypo = config.get("num_hypo", 1)
             if num_hypo > 1:
                 indices = torch.zeros(num_hypo).long().to(device)
                 cache.batch_select_indices(indices)
-                modality_token = modality_token.tile(num_hypo, 1, 1)
+                prev_token = prev_token.tile(num_hypo, 1, 1)
 
-            cfg = this_config.get("cfg", 1)
+            cfg = config.get("cfg", 1)
             if cfg > 1:
                 cache = self._prepare_cfg_cache(cache)
 
-            # (4) Inference loop
+            # (2) Inference loop
             hypos = list()
             finish_idx = torch.ones(num_hypo).long().to(device) * -1
-            prev_token = modality_token
-            for step in range(this_config["max_step"]):
-                # (4.1) Model inference
+            for step in range(config["max_step"]):
+                # (2.1) Model inference
                 if cfg > 1:
                     prev_token = prev_token.tile(2, 1, 1)
 
                 logits, cache = self._step(
-                    input_ids=prev_token, past_key_values=cache, mask=modality_mask
+                    input_ids=prev_token, past_key_values=cache, mask=mask
                 )
 
                 if cfg > 1:
                     logits, cfg_logits = logits.chunk(2)
                     logits = logits * cfg + cfg_logits * (1 - cfg)
-                    logits.masked_fill_(modality_mask, float("-inf"))
+                    logits.masked_fill_(mask, float("-inf"))
 
-                # (4.2) token prediction based on logits
+                # (2.2) token prediction based on logits
                 prev_token = self._logits_to_token(
                     logits,
-                    temperature=this_config["temperature"],
-                    topk=this_config["topk"],
+                    temperature=config["temperature"],
+                    topk=config["topk"],
                 )
                 hypos.append(prev_token)
 
-                # (4.3) Break when proper
+                # (2.3) Break when proper
                 finish_here = torch.logical_and(
                     torch.logical_or(
                         prev_token[:, 0, 0] == self.eot_token_id,
@@ -564,7 +565,7 @@ def build_parallel_hf_class(model_hf_tag):
                 if torch.all(finish_idx >= 0):
                     break
 
-            # (5) Finalize
+            # (3) Finalize
             finish_idx = torch.where(finish_idx == -1, step, finish_idx)
             hypos = torch.cat(hypos, dim=1)
 
@@ -575,7 +576,7 @@ def build_parallel_hf_class(model_hf_tag):
             # NOTE(Jinchuan): Prefill the last token. This is effective only for
             # multi-segment inference with batch size of 1
             prev_token[..., 1:] = 0
-            _, cache = self._step(input_ids=prev_token, past_key_values=cache)
+            last_logits, cache = self._step(input_ids=prev_token, past_key_values=cache)
 
             # TODO(Jinchuan): If this is for delay-interleaved audio, we should
             # enforce it to have valid paddings here.
@@ -583,9 +584,9 @@ def build_parallel_hf_class(model_hf_tag):
             hypo_lst = list()
             for idx, hypo in zip(finish_idx, hypos):
                 hypo = hypo[: idx + 1]
-                hypo_lst.append((hypo, modality))
+                hypo_lst.append(hypo)
 
-            return hypo_lst, cache
+            return hypo_lst, cache, last_logits
 
         def prepare_inference(self):
             # (1) the special tokens for prefill
