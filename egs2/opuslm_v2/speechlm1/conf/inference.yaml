@@ -1,6 +1,8 @@
-dtype: bfloat16
-# dtype: float32
+# dtype: bfloat16
+dtype: float32
 num_hypo: 1
+
+enforce_modality: ["text", "audio"]
 
 audio:
   temperature: 0.8
