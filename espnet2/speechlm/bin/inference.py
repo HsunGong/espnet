@@ -160,7 +160,7 @@ def inference_worker(
     logger = setup_worker_logger(rank)
     logger.info(f"Starting inference worker (rank {rank}/{world_size})")
 
-    torch.cuda.set_device("cuda:0")
+    torch.cuda.set_device(f"cuda:{rank}")
 
     # Load configs in worker
     with open(train_config_path, "r") as f:

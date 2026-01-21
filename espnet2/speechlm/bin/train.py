@@ -267,6 +267,7 @@ def main():
             tags=args.wandb_tags,
             dir=str(args.output_dir),
             resume="auto",
+            settings=wandb.Settings(init_timeout=120)
         )
     else:
         wandb.init(mode="disabled")
