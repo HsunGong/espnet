@@ -43,5 +43,5 @@ trainer:
     deepspeed_config: conf/deepspeed_stage3.json
     freeze_param: [multimodal_io_dict.discrete_audio, multimodal_io_dict.continuous_audio]
     log_interval: 1
-    max_step: 500 # total bs=109 #
-    save_interval: 100 # per-epoch
+    max_step: 350500 # total bs=109 <- dev
+    save_interval: 109 # per-epoch <- dev

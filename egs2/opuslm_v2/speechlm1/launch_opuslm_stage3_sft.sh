@@ -14,15 +14,17 @@ node_rank=0
 master_addr=localhost
 master_port=8888
 
-train_registered_specifier="dialogue:vctk_vc_train_realistic dialogue:vctk_vc_train_imaginary dialogue:vctk_vc_dev_realistic dialogue:vctk_vc_dev_imaginary"
-valid_registered_specifier="dialogue:vctk_vc_eval1_realistic"
-test_registered_specifier="dialogue:vctk_vc_eval1_realistic"
+train_registered_specifier="audio_to_text:clotho_test"
+valid_registered_specifier="audio_to_text:clotho_test"
+
+train_registered_specifier="dialogue:gen_v1_realistic dialogue:gen_v1_imaginary"
+test_registered_specifier="dialogue:gen_v1_realistic"
 
 train_config=conf/train_stage3_qwen3_base.yaml
-resume_path=/mnt/home/jinchuat-andr-d6b58f/jinchuat/espnet_sft/egs2/opuslm_v2/speechlm1/exp/opuslm_v2_stage2_pretrain_base/checkpoints/step_350000
+resume_path=exp/opuslm_v2_stage2_pretrain_base/checkpoints/step_350000
 
 stats_dir=exp/stats_qwen3
-exp_dir=exp/opuslm_v2_stage3_sft_vctk_vc
+exp_dir=exp/opuslm_v2_stage3_sft_gen_v1
 mkdir -p ${exp_dir}
 
 inference_config=conf/inference.yaml
@@ -42,7 +44,7 @@ if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
     --valid-registered-specifier "${valid_registered_specifier}" \
     --train-config ${train_config} \
     --output-dir ${stats_dir} \
-    --num-workers 16
+    --num-workers 88
 fi
 
 
