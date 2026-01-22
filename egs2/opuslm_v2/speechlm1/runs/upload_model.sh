@@ -24,6 +24,8 @@ fi
   exit 1
 }
 
+cp $exp_dir/train.yaml ${exp_dir}/checkpoints/step_${step}
+
 echo "[INFO] Uploading to Hugging Face..."
 # This uploads the staged folder into a remote subfolder named REMOTE_NAME/
 hf upload "${REPO_ID}" "${exp_dir}/checkpoints/step_${step}" \
