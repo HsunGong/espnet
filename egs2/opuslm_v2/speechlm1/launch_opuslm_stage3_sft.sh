@@ -14,17 +14,18 @@ node_rank=0
 master_addr=localhost
 master_port=8888
 
-train_registered_specifier="audio_to_text:clotho_test"
-valid_registered_specifier="audio_to_text:clotho_test"
+train_registered_specifier=""
+train_registered_specifier+="dialogue:part2_gen_v1_realistic dialogue:part2_gen_v1_imaginary "
+train_registered_specifier+="dialogue:part3_gen_v1_realistic dialogue:part3_gen_v1_imaginary "
+train_registered_specifier+="dialogue:part4_gen_v1_realistic dialogue:part4_gen_v1_imaginary "
 
-train_registered_specifier="dialogue:gen_v1_realistic dialogue:gen_v1_imaginary"
-test_registered_specifier="dialogue:gen_v1_realistic"
+valid_registered_specifier="text_to_audio:clotho_test"
 
 train_config=conf/train_stage3_qwen3_base.yaml
-resume_path=exp/opuslm_v2_stage2_pretrain_base/checkpoints/step_350000
+resume_path=exp/opuslm_v2_stage2_pretrain_base/checkpoints/step_260000
 
 stats_dir=exp/stats_qwen3
-exp_dir=exp/opuslm_v2_stage3_sft_gen_v1
+exp_dir=exp/opuslm_v2_stage3_sft_qwen3_geneneration_v2
 mkdir -p ${exp_dir}
 
 inference_config=conf/inference.yaml

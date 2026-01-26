@@ -21,15 +21,26 @@ stop_stage=100
 version=
 # vLLM URLs: use ":" to separate multiple URLs serving the same model
 # Example: "http://host1:8000/v1:http://host2:8000/v1:http://host3:8000/v1"
-vllm_url_stage1="http://cnode1-002:9000/v1:http://cnode1-003:9000/v1:http://cnode1-005:9000/v1"                                   
-vllm_url_stage2="http://cnode1-002:9000/v1:http://cnode1-003:9000/v1:http://cnode1-005:9000/v1"
-vllm_url_stage4="http://cnode1-002:9000/v1:http://cnode1-003:9000/v1:http://cnode1-005:9000/v1"
+
+vllm_url=
+for id in 03 05 10 15 20; do
+    vllm_url+="${vllm_url:+:}http://cnode1-0${id}:9000/v1"
+done
+
+vllm_url_stage1=${vllm_url}
+vllm_url_stage2=${vllm_url}
+vllm_url_stage4=${vllm_url}
+
 model_stage1="Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
 model_stage2="Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
 model_stage4="Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
-input_file="/mnt/home/haoranw4-andr-49167f/data/sft_data/part2_pretrain_curation/metadata.jsonl"
-output_base="data/sft_part2"
-num_workers=2400
+# input_file="/mnt/home/haoranw4-andr-49167f/data/sft_data/part2_pretrain_curation/metadata.jsonl"
+# output_base="data/sft_part2"
+# input_file=/mnt/home/haoranw4-andr-49167f/data/sft_data/part3_known_high_quality/metadata/genshin_starrail/metadata.jsonl
+# output_base="data/sft_part3"
+input_file=/mnt/home/haoranw4-andr-49167f/data/sft_data/part4_wer_0/metadata.jsonl
+output_base="data/sft_part4"
+num_workers=5000
 timeout=1200
 resume=true
 num_samples=-1  # -1 means process all samples
