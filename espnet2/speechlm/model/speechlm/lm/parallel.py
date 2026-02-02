@@ -535,14 +535,18 @@ def build_parallel_hf_class(model_hf_tag):
                 if cfg > 1:
                     prev_token = prev_token.tile(2, 1, 1)
 
+                this_mask = mask.clone()
+                if step >= config.get("min_step", 1):
+                    this_mask[:, :, 0, self.eot_token_id] = False
+                    this_mask[:, :, 0, self.eos_token_id] = False
                 logits, cache = self._step(
-                    input_ids=prev_token, past_key_values=cache, mask=mask
+                    input_ids=prev_token, past_key_values=cache, mask=this_mask
                 )
 
                 if cfg > 1:
                     logits, cfg_logits = logits.chunk(2)
                     logits = logits * cfg + cfg_logits * (1 - cfg)
-                    logits.masked_fill_(mask, float("-inf"))
+                    logits.masked_fill_(this_mask, float("-inf"))
 
                 # (2.2) token prediction based on logits
                 prev_token = self._logits_to_token(
@@ -616,8 +620,8 @@ def build_parallel_hf_class(model_hf_tag):
                     mask[idx, start:end] = False
                 for idx in range(len(intervals), self.num_stream):
                     mask[idx, 0] = False  # unused stream: only allow paddings
-                mask[0, self.eot_token_id] = False
-                mask[0, self.eos_token_id] = False
+                # mask[0, self.eot_token_id] = False
+                # mask[0, self.eos_token_id] = False
 
                 io_name = "audio" if io_name == "discrete_audio" else io_name
                 mask = mask[None, None, :, :]

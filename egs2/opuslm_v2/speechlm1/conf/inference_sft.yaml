@@ -1,7 +1,7 @@
 dtype: bfloat16
-# dtype: float32
 num_hypo: 1
 
+# First predict text, and then audio.
 enforce_modality: ["text", "audio"]
 
 audio:
@@ -9,9 +9,11 @@ audio:
   topk: 20
   cfg: 3
   max_step: 2048
+  min_step: 50
 
 text:
   temperature: 0.6
   topk: 20
   cfg: 1
-  max_step: 2048
+  max_step: 8192
+  min_step: 1

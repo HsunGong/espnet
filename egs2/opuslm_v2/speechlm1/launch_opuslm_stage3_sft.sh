@@ -18,20 +18,43 @@ train_registered_specifier=""
 train_registered_specifier+="dialogue:part2_gen_v1_realistic dialogue:part2_gen_v1_imaginary "
 train_registered_specifier+="dialogue:part3_gen_v1_realistic dialogue:part3_gen_v1_imaginary "
 train_registered_specifier+="dialogue:part4_gen_v1_realistic dialogue:part4_gen_v1_imaginary "
+train_registered_specifier+="dialogue:airbench_train_v1 "
+train_registered_specifier+="dialogue:mmau_train_v1 "
+train_registered_specifier+="dialogue:asr_v2_inverse_200k "
+train_registered_specifier+="dialogue:audiobench_train_v1 "
 
 valid_registered_specifier="text_to_audio:clotho_test"
+
+# test_registered_specifier="dialogue:generation_test_clean"
+# test_registered_specifier="dialogue:generation_test_audiocaps "
+# test_registered_specifier="dialogue:generation_mmau"
+
+test_registered_specifier+="dialogue:librispeech_test_clean dialogue:librispeech_test_other "
+# test_registered_specifier+="dialogue:mmau_test "
+# test_registered_specifier+="dialogue:mmar_test "
+# test_registered_specifier+="dialogue:airbench_test "
+# test_registered_specifier+="dialogue:audiocaps_qa_test dialogue:cn_college_listen_mcq_test dialogue:dream_tts_mcq_test dialogue:public_sg_speech_qa_test dialogue:wavcaps_qa_test "
 
 train_config=conf/train_stage3_qwen3_base.yaml
 resume_path=exp/opuslm_v2_stage2_pretrain_base/checkpoints/step_260000
 
 stats_dir=exp/stats_qwen3
-exp_dir=exp/opuslm_v2_stage3_sft_qwen3_geneneration_v2
+# exp_dir=exp/opuslm_v2_stage3_sft_qwen3_geneneration_v2
+# exp_dir=exp/opuslm_v2_stage3_sft_gen_v1
+# exp_dir=exp/opuslm_v2_stage3_sft_qwen3_geneneration_v2_speech_only
+# exp_dir=exp/opuslm_v2_stage3_sft_qwen3_v2
+# exp_dir=exp/opuslm_v2_stage3_sft_all_260ksteps_train_v1
+# exp_dir=exp/opuslm_v2_stage3_sft_qwen3_combine_v1
+# exp_dir=exp/opuslm_v2_stage3_sft_qwen3_combine_v1_2node
+exp_dir=exp/opuslm_v2_stage3_sft_qwen3_combine_v2_3node
 mkdir -p ${exp_dir}
 
-inference_config=conf/inference.yaml
-inference_step=10000
-inference_nj=1
-inference_workers=1
+inference_config=conf/inference_sft.yaml
+# inference_step=267570 #275140 #267570
+# inference_step=275000
+inference_step=272500
+inference_nj=16
+inference_workers=3
 
 . utils/parse_options.sh
 
