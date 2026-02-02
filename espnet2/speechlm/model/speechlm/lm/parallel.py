@@ -183,7 +183,7 @@ def build_parallel_hf_class(model_hf_tag):
                 model.freeze_text_end = text_end
 
                 def zero_text_embed_grad(grad):
-                    grad[model.freeze_text_start:model.freeze_text_end] = 0
+                    grad[model.freeze_text_start : model.freeze_text_end] = 0
                     return grad
 
                 model.model.embed_tokens.weight.register_hook(zero_text_embed_grad)
@@ -305,7 +305,7 @@ def build_parallel_hf_class(model_hf_tag):
                     feat = self.adaptor[io_name](feat)
                     # NOTE(Jinchuan): Force the length to match
                     input_embeds[bidx, start : start + length] = feat
-            
+
             # (4) Add dummy forward to ensure all multimodal_io are always included
             # in the computation graph, even if not used in this batch.
             # This prevents gradient mismatch errors in DeepSpeed ZeRO.
@@ -442,7 +442,7 @@ def build_parallel_hf_class(model_hf_tag):
             # (1) Prefill input_ids
             input_ids = kwargs.get("seqs")
             input_embeds = self._embed(input_ids, kwargs)
-            
+
             # input_embeds = self._embed(input_ids, kwargs)
             _, cache = self._step(
                 input_embeds=input_embeds,
@@ -464,7 +464,7 @@ def build_parallel_hf_class(model_hf_tag):
                 try:
                     modality = enforce_modalities[num_msg]
                     modality_token = getattr(self, f"{modality}_token")
-                except:
+                except Exception:
                     modality_token = logits.argmax(3)
                     modality = modality_token.flatten()[0].item()
                     modality = self.vocab[modality].replace("<|", "").replace("|>", "")
@@ -500,9 +500,12 @@ def build_parallel_hf_class(model_hf_tag):
                 if len(decoded_sequences) > 1:
                     break  # multi-segment decoding only supports batch size of 1
 
-                elif decoded_sequences[0][-1, 0] != self.eot_token_id and num_msg >= len(enforce_modalities) - 1:
+                elif (
+                    decoded_sequences[0][-1, 0] != self.eot_token_id
+                    and num_msg >= len(enforce_modalities) - 1
+                ):
                     break  # decode next segment only when ending with <|eot|>
-                
+
                 num_msg += 1
 
             return messages, cache
@@ -639,7 +642,9 @@ def build_parallel_hf_class(model_hf_tag):
                 assert input_ids.size(2) == self.num_stream
                 input_embeds = self.model.embed_tokens(input_ids)
                 input_embeds[..., 1:, :] = torch.where(
-                    (input_ids[..., 1:] == 0).unsqueeze(-1), 0.0, input_embeds[..., 1:, :]
+                    (input_ids[..., 1:] == 0).unsqueeze(-1),
+                    0.0,
+                    input_embeds[..., 1:, :],
                 )
                 input_embeds = input_embeds.sum(dim=2)
 

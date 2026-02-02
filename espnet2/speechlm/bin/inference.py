@@ -229,7 +229,7 @@ def inference_worker(
             logger.info(
                 f"Segment {idx}, role={role}, modality={modality}, content={content}"
             )
-        
+
         results[example_id] = messages
         with open(output_file, "wb") as writer:
             writer.write(

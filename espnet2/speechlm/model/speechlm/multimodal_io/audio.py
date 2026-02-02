@@ -687,7 +687,7 @@ class DiscreteAudioIO(AbsIO):
         wav, sr = data
 
         assert wav.ndim == 2, "Audio array must be 2D: [num_channels, num_samples]"
-        wav = wav[:1] # Use only first channel for tokenization
+        wav = wav[:1]  # Use only first channel for tokenization
 
         # Resample if sample rate doesn't match
         if sr != self.sample_rate:
@@ -1124,8 +1124,7 @@ class ContinuousAudioIO(AbsIO):
         dummy_frames = 4  # Minimal number of frames
         # Input format: [batch, time, n_mels] (spectrogram features)
         dummy_data = torch.zeros(
-            1, dummy_frames, n_mels,
-            device=ref_tensor.device, dtype=ref_tensor.dtype
+            1, dummy_frames, n_mels, device=ref_tensor.device, dtype=ref_tensor.dtype
         )
         dummy_length = torch.tensor(
             [dummy_frames], device=ref_tensor.device, dtype=torch.long

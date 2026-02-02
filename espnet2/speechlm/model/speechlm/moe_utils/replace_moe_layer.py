@@ -135,15 +135,24 @@ class Qwen3MoeSparseMoeBlock_DeepSpeed_EP(DeepSpeed_MoE):
 
         # Router and sparse dispatch preparation
         router_logits = self.gate(hidden_states)
-        dispatch_idx, topk_indices, topk_weights, positions, capacity = \
+        dispatch_idx, topk_indices, topk_weights, positions, capacity = (
             self.prepare_dispatch(router_logits)
+        )
 
         # Gather tokens for each expert using sparse indexing
         # Pad with zero row for empty slots (dispatch_idx == num_tokens)
-        hidden_padded = torch.cat([
-            hidden_states,
-            torch.zeros(1, hidden_dim, device=hidden_states.device, dtype=hidden_states.dtype)
-        ], dim=0)
+        hidden_padded = torch.cat(
+            [
+                hidden_states,
+                torch.zeros(
+                    1,
+                    hidden_dim,
+                    device=hidden_states.device,
+                    dtype=hidden_states.dtype,
+                ),
+            ],
+            dim=0,
+        )
 
         expert_input = hidden_padded[dispatch_idx.view(-1)].view(
             self.num_experts, capacity, hidden_dim
@@ -167,15 +176,17 @@ class Qwen3MoeSparseMoeBlock_DeepSpeed_EP(DeepSpeed_MoE):
 
         # Combine: weighted sum of expert outputs back to tokens
         output = torch.zeros(
-            num_tokens, hidden_dim,
-            device=hidden_states.device, dtype=hidden_states.dtype
+            num_tokens,
+            hidden_dim,
+            device=hidden_states.device,
+            dtype=hidden_states.dtype,
         )
         expert_output_flat = expert_output.view(-1, hidden_dim)
 
         for k in range(self.top_k):
             expert_k = topk_indices[:, k]
             pos_k = positions[:, k]
-            weight_k = topk_weights[:, k:k+1]
+            weight_k = topk_weights[:, k : k + 1]
 
             linear_idx = expert_k * capacity + pos_k
             gathered = expert_output_flat[linear_idx]
@@ -211,20 +222,26 @@ class Qwen3MoeSparseMoeBlock_DeepSpeed_EP(DeepSpeed_MoE):
         # Everything below is index computation - no gradients needed
         with torch.no_grad():
             flat_expert_indices = topk_indices.view(-1)
-            expert_counts = torch.bincount(flat_expert_indices, minlength=self.num_experts)
+            expert_counts = torch.bincount(
+                flat_expert_indices, minlength=self.num_experts
+            )
             capacity = expert_counts.max()
             dist.all_reduce(capacity, op=dist.ReduceOp.MAX, group=self.ep_group)
             capacity = capacity.item()
 
             # Compute positions within each expert's buffer using vectorized ops
             sorted_expert_idx, sort_perm = torch.sort(flat_expert_indices, stable=True)
-            arange = torch.arange(1, len(sorted_expert_idx) + 1, device=device, dtype=torch.long)
+            arange = torch.arange(
+                1, len(sorted_expert_idx) + 1, device=device, dtype=torch.long
+            )
 
             # Find segment boundaries and compute positions
-            changes = torch.cat([
-                torch.ones(1, dtype=torch.bool, device=device),
-                sorted_expert_idx[1:] != sorted_expert_idx[:-1]
-            ])
+            changes = torch.cat(
+                [
+                    torch.ones(1, dtype=torch.bool, device=device),
+                    sorted_expert_idx[1:] != sorted_expert_idx[:-1],
+                ]
+            )
             segment_starts = arange * changes
             segment_start_cummax = torch.cummax(segment_starts, dim=0)[0]
             positions_sorted = arange - segment_start_cummax
@@ -236,11 +253,20 @@ class Qwen3MoeSparseMoeBlock_DeepSpeed_EP(DeepSpeed_MoE):
 
             # Build dispatch index (num_tokens as padding for empty slots)
             dispatch_idx = torch.full(
-                (self.num_experts, capacity), num_tokens, dtype=torch.long, device=device
+                (self.num_experts, capacity),
+                num_tokens,
+                dtype=torch.long,
+                device=device,
             )
             linear_indices = topk_indices * capacity + positions
-            token_ids = torch.arange(num_tokens, device=device).unsqueeze(1).expand(-1, self.top_k)
-            dispatch_idx.view(-1).scatter_(0, linear_indices.view(-1), token_ids.reshape(-1))
+            token_ids = (
+                torch.arange(num_tokens, device=device)
+                .unsqueeze(1)
+                .expand(-1, self.top_k)
+            )
+            dispatch_idx.view(-1).scatter_(
+                0, linear_indices.view(-1), token_ids.reshape(-1)
+            )
 
         return dispatch_idx, topk_indices, topk_weights, positions, capacity
 
