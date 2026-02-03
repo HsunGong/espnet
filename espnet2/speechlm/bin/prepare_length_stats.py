@@ -196,32 +196,27 @@ def main():
     preprocessor = job_template.build_preprocessor()
 
     # Collect all specifiers to process
-    specifiers = []
     for split in ["train", "valid"]:
         for spec_type in ["unregistered", "registered"]:
             spec_str = getattr(args, f"{split}_{spec_type}_specifier")
             if spec_str:
-                for spec in spec_str.split():
-                    specifiers.append((spec_type, spec))
+                for specifier in spec_str.split():
+                    # Parse specifier and generate output filename
+                    parts = specifier.split(":")
+                    task, data_name = parts[0], parts[1]
+                    output_file = args.output_dir / f"stats_{task}_{data_name}.jsonl"
 
-    # Process each specifier
-    for spec_type, specifier in specifiers:
-        # Parse specifier and generate output filename
-        parts = specifier.split(":")
-        task, data_name = parts[0], parts[1]
-        output_file = args.output_dir / f"stats_{task}_{data_name}.jsonl"
+                    # Skip if already exists
+                    if output_file.exists():
+                        logger.info(f"Skipping {specifier} - stats already exist")
+                        continue
 
-        # Skip if already exists
-        if output_file.exists():
-            logger.info(f"Skipping {specifier} - stats already exist")
-            continue
-
-        # Collect and save statistics
-        logger.info(f"Processing {spec_type} specifier: {specifier}")
-        stats = collect_length_stats(
-            preprocessor, args.num_workers, spec_type, specifier
-        )
-        save_stats(stats, output_file)
+                    # Collect and save statistics
+                    logger.info(f"Processing {spec_type} specifier: {specifier} with worker={args.num_workers}")
+                    stats = collect_length_stats(
+                        preprocessor, args.num_workers if split == "train" else max(args.num_workers, 16), spec_type, specifier
+                    )
+                    save_stats(stats, output_file)
 
 
 if __name__ == "__main__":

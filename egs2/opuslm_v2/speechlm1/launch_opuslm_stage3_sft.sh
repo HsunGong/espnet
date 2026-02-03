@@ -28,8 +28,8 @@ exp_dir=exp/opuslm_v2_stage3_sft_gen_v1
 mkdir -p ${exp_dir}
 
 inference_config=conf/inference.yaml
-inference_step=10000
-inference_nj=1
+inference_step=-1
+inference_nj=8
 inference_workers=1
 
 . utils/parse_options.sh
@@ -44,7 +44,7 @@ if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
     --valid-registered-specifier "${valid_registered_specifier}" \
     --train-config ${train_config} \
     --output-dir ${stats_dir} \
-    --num-workers 88
+    --num-workers 16
 fi
 
 
@@ -68,14 +68,19 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
       --output-dir ${exp_dir} \
       --resume-path ${resume_path} \
       --save-loader-state \
-      --wandb-mode online \
+      --wandb-mode offline \
       > ${exp_dir}/logs/train_node${node_rank}_${timestamp}.log 2>&1 
 fi
 
 if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
   inference_tag=$(basename "${inference_config%.*}")
 
-  inference_dir=${exp_dir}/inference/${inference_tag}_step_${inference_step}
+  if [ ${inference_step} -eq -1 ]; then
+    inference_step=$(ls ${exp_dir}/checkpoints | grep step_ | awk -F"step_" '{print $2}' | sort -n | tail -n 1)
+    echo "inference_step is not provided. Using the last step: ${inference_step}"
+  fi
+
+  inference_dir=$(realpath ${exp_dir}/inference/${inference_tag}_step_${inference_step})
   mkdir -p ${inference_dir}
 
   inference_ckpt=(${exp_dir}/checkpoints/step_${inference_step}/global_step*/mp_rank_00_model_states.pt)
@@ -93,6 +98,18 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
         --output-dir ${inference_dir} \
         --test-registered-specifier "${specifier}" \
         --num-worker ${inference_workers} &
-  done; wait
-  
+  done
+  wait
+  echo "Inference done."
+fi
+
+if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
+  # jq merge all json files into one
+  for specifier in ${test_registered_specifier}; do
+    mkdir -p ${inference_dir}/${specifier//:/_}/wavs
+    ln -s ${inference_dir}/${specifier//:/_}/*/*.wav \
+    ${inference_dir}/${specifier//:/_}/wavs/
+
+    jq -s 'add' ${inference_dir}/${specifier//:/_}/*/results.json > ${inference_dir}/${specifier//:/_}/results.json
+  done
 fi
