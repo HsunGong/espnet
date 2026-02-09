@@ -13,7 +13,6 @@ Key differences from DeepSpeed EP:
 - Integrates with FSDP2 via separate edp_mesh for expert sharding
 """
 
-import copy
 from functools import partial
 from typing import Tuple
 
@@ -42,16 +41,16 @@ class GroupedExperts(nn.Module):
         w3: Up projection weights [num_experts, hidden_dim, input_dim]
     """
 
-    def __init__(self, dim: int, hidden_dim: int, num_experts: int):
+    def __init__(self, w1: torch.Tensor, w2: torch.Tensor, w3: torch.Tensor):
         super().__init__()
-        self.num_experts = num_experts
+        self.num_experts = w1.shape[0]
 
         # Stacked expert weights
         # w1/w3: (num_experts, hidden_dim, dim) - gate/up projection
         # w2: (num_experts, dim, hidden_dim) - down projection
-        self.w1 = nn.Parameter(torch.empty(num_experts, hidden_dim, dim))
-        self.w2 = nn.Parameter(torch.empty(num_experts, dim, hidden_dim))
-        self.w3 = nn.Parameter(torch.empty(num_experts, hidden_dim, dim))
+        self.w1 = nn.Parameter(w1)
+        self.w2 = nn.Parameter(w2)
+        self.w3 = nn.Parameter(w3)
 
     def forward(
         self,
@@ -72,17 +71,20 @@ class GroupedExperts(nn.Module):
         w2 = self.w2.to_local() if isinstance(self.w2, DTensor) else self.w2
         w3 = self.w3.to_local() if isinstance(self.w3, DTensor) else self.w3
 
-        # grouped_mm requires bfloat16 inputs
-        assert x.dtype == torch.bfloat16, f"grouped_mm requires bfloat16, got {x.dtype}"
-
         offsets = torch.cumsum(num_tokens_per_expert, dim=0, dtype=torch.int32)
 
-        # SwiGLU: down(silu(gate(x)) * up(x))
-        h = F.silu(F.grouped_mm(x, w1.transpose(-2, -1), offs=offsets))
-        h = h * F.grouped_mm(x, w3.transpose(-2, -1), offs=offsets)
-        out = F.grouped_mm(h, w2.transpose(-2, -1), offs=offsets)
+        # grouped_mm requires bfloat16 — cast inputs/weights explicitly
+        x_bf16 = x.bfloat16()
+        w1_bf16 = w1.bfloat16()
+        w2_bf16 = w2.bfloat16()
+        w3_bf16 = w3.bfloat16()
 
-        return out
+        # SwiGLU: down(silu(gate(x)) * up(x))
+        h = F.silu(F.grouped_mm(x_bf16, w1_bf16.transpose(-2, -1), offs=offsets))
+        h = h * F.grouped_mm(x_bf16, w3_bf16.transpose(-2, -1), offs=offsets)
+        out = F.grouped_mm(h, w2_bf16.transpose(-2, -1), offs=offsets)
+
+        return out.type_as(x)
 
 
 class Qwen3MoeSparseMoeBlock_TorchTitan(Qwen3MoeSparseMoeBlock):
@@ -123,42 +125,16 @@ class Qwen3MoeSparseMoeBlock_TorchTitan(Qwen3MoeSparseMoeBlock):
         self.top_k = module.top_k
         self.norm_topk_prob = module.norm_topk_prob
 
-        # Get dimensions from first expert
-        first_expert = module.experts[0]
-        hidden_size = first_expert.gate_proj.in_features
-        intermediate_size = first_expert.gate_proj.out_features
+        # Move gate directly (old module will be replaced and GC'd)
+        self.gate = module.gate
 
-        # Copy router gate (replicated across all EP ranks)
-        self.gate = copy.deepcopy(module.gate)
+        # Stack expert weights with torch.stack (single C++ op per weight)
+        # instead of allocating empty tensors + Python copy loop over 128 experts
+        w1 = torch.stack([e.gate_proj.weight.data for e in module.experts])
+        w2 = torch.stack([e.down_proj.weight.data for e in module.experts])
+        w3 = torch.stack([e.up_proj.weight.data for e in module.experts])
 
-        # Create GroupedExperts with stacked weights
-        self.experts = GroupedExperts(
-            dim=hidden_size,
-            hidden_dim=intermediate_size,
-            num_experts=self.num_experts,
-        )
-
-        # Copy weights from HuggingFace experts to stacked format
-        self._copy_weights_from_hf(module)
-
-    def _copy_weights_from_hf(self, module: Qwen3MoeSparseMoeBlock) -> None:
-        """Copy weights from HuggingFace MoE block to stacked format.
-
-        HF expert structure:
-            experts[i].gate_proj.weight: [hidden_dim, input_dim]
-            experts[i].up_proj.weight: [hidden_dim, input_dim]
-            experts[i].down_proj.weight: [input_dim, hidden_dim]
-
-        TorchTitan format:
-            w1[i]: [hidden_dim, input_dim] (gate)
-            w2[i]: [input_dim, hidden_dim] (down)
-            w3[i]: [hidden_dim, input_dim] (up)
-        """
-        with torch.no_grad():
-            for i, expert in enumerate(module.experts):
-                self.experts.w1.data[i].copy_(expert.gate_proj.weight)
-                self.experts.w2.data[i].copy_(expert.down_proj.weight)
-                self.experts.w3.data[i].copy_(expert.up_proj.weight)
+        self.experts = GroupedExperts(w1, w2, w3)
 
     def forward(self, hidden_states: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Forward pass with sparse routing.

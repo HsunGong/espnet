@@ -41,6 +41,5 @@ parallel_strategies = {
 
 __all__ = [
     "init_parallel_dims",
-    "parallelize_qwen3_hf",
     "parallel_strategies",
 ]

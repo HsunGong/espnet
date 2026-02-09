@@ -118,20 +118,21 @@ def parallelize_qwen3_hf(
     # Check if MoE with EP enabled
     is_moe = isinstance(model, Qwen3MoeForCausalLM) and parallel_dims.ep_enabled
 
-    # Apply torch.compile first (before activation checkpointing and FSDP)
+    # Apply MoE layer replacement + Expert Parallelism FIRST
+    # (must happen before torch.compile so compile traces the TorchTitan MoE forward)
+    if is_moe:
+        model = replace_qwen3_moe_layer_titan(model)
+        model.is_moe = True
+        model = apply_moe_ep_qwen3(model, parallel_dims)
+        logger.info("Applied MoE Expert Parallelism")
+
+    # Apply torch.compile (before activation checkpointing and FSDP)
     if titan_config.get("compile", False):
         model = apply_torch_compile_qwen3(model, titan_config)
 
     # Apply activation checkpointing (before FSDP)
     if titan_config.get("activation_checkpoint", False):
         model = apply_activation_checkpoint_qwen3(model)
-
-    # Apply Expert Parallelism if MoE and EP enabled
-    if is_moe:
-        model = replace_qwen3_moe_layer_titan(model)
-        model.is_moe = True
-        model = apply_moe_ep_qwen3(model, parallel_dims)
-        logger.info("Applied MoE Expert Parallelism")
 
     # Apply FSDP2 wrapping
     if parallel_dims.fsdp_enabled or is_moe:
