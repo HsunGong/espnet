@@ -2,7 +2,7 @@ job_type: speechlm
 
 multimodal_io:
     text:
-        tokenizer_name: Qwen/Qwen3-30B-A3B
+        tokenizer_name: Qwen/Qwen3-32B
     discrete_audio:
         codec_choice: Xcodec
         codec_hf_model_tag: hf-audio/xcodec-hubert-general
@@ -18,13 +18,13 @@ multimodal_io:
 
 model:
     model_choice: parallel
-    model_hf_tag: Qwen/Qwen3-30B-A3B
+    model_hf_tag: Qwen/Qwen3-32B
     model_conf:
         attn_implementation: flash_attention_3
         dtype: bfloat16
         compile_transformer_body: false
         freeze_text_embeddings: false
-    activation_checkpointing: true
+    activation_checkpointing: false
 
 preprocessor:
     audio_input: continuous_audio
@@ -34,7 +34,7 @@ preprocessor:
 
 data_loading:
     batchfy_method: pack
-    batch_size: 20000
+    batch_size: 5000
     save_loader_state: false
     seed: 43
     num_workers: 6
@@ -44,7 +44,7 @@ trainer:
     freeze_param: [multimodal_io_dict.discrete_audio, multimodal_io_dict.continuous_audio]
     max_step: 700000
     save_interval: 5000
-    log_interval: 10
+    log_interval: 1
 
     optimizer:
         name: AdamW
@@ -71,12 +71,10 @@ trainer:
         activation_checkpoint: false
 
         # Torch Compile
-        compile: true
+        compile: false
+        compile_mode: max-autotune
 
         # FSDP
-        reshard_after_forward: always  # Reshard after forward to save ~12GB/GPU
+        reshard_after_forward: default # Faster when memory is abundant
         dp_shard: 8
         dp_replicate: 1
-
-        # Expert Parallelism (for MoE models)
-        ep: 8  # Number of expert parallel shards (Qwen3-30B-A3B has 128 experts)

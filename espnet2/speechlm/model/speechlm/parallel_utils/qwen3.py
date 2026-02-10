@@ -33,6 +33,7 @@ import torch
 import torch.nn as nn
 from torch.distributed.fsdp import fully_shard, MixedPrecisionPolicy
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import checkpoint_wrapper
+from torch.distributed.tensor import Shard
 from torch.distributed.tensor.parallel import parallelize_module
 from torchtitan.distributed import ParallelDims
 from torchtitan.distributed.expert_parallel import ExpertParallel
@@ -128,6 +129,8 @@ def parallelize_qwen3_hf(
 
     # Apply torch.compile (before activation checkpointing and FSDP)
     if titan_config.get("compile", False):
+        # Avoid graph breaks on dynamic shapes in token-choice MoE
+        torch._dynamo.config.capture_scalar_outputs = True
         model = apply_torch_compile_qwen3(model, titan_config)
 
     # Apply activation checkpointing (before FSDP)
@@ -235,7 +238,32 @@ def apply_fsdp_qwen3(
             # For MoE layers, first shard experts on edp_mesh
             if is_moe and hasattr(layer, "moe_enabled") and layer.moe_enabled:
                 if hasattr(layer.mlp, "experts") and moe_fsdp_config is not None:
-                    fully_shard(layer.mlp.experts, **moe_fsdp_config)
+                    # When efsdp_size * ep_degree > num_experts, we must shard
+                    # on dim 1 to avoid conflict with EP's dim 0 sharding.
+                    experts_shard_placement_fn = None
+                    if edp_mesh is not None:
+                        efsdp_size = (
+                            edp_mesh["efsdp"].size()
+                            if edp_mesh.ndim > 1
+                            else edp_mesh.size()
+                        )
+                        if (
+                            efsdp_size * parallel_dims.ep
+                            > layer.mlp.experts.num_experts
+                        ):
+                            experts_shard_placement_fn = lambda param: Shard(1)
+
+                    fully_shard(
+                        layer.mlp.experts,
+                        **moe_fsdp_config,
+                        shard_placement_fn=experts_shard_placement_fn,
+                    )
+
+                    # Expert FSDP mesh differs from data-parallel mesh, but
+                    # gradient division must be consistent with data parallelism.
+                    layer.mlp.experts.set_gradient_divide_factor(
+                        parallel_dims.fsdp_gradient_divide_factor
+                    )
             fully_shard(layer, **fsdp_config)
         logger.info(f"FSDP wrapped: {len(model.model.layers)} transformer layers")
 
@@ -259,30 +287,34 @@ def apply_fsdp_qwen3(
     logger.info(f"FSDP wrapped: {' + '.join(module_names)} (no reshard after forward)")
 
     # 5. Shard multimodal_io_dict (each module in the dict)
-    if hasattr(model, "multimodal_io_dict") and isinstance(model.multimodal_io_dict, dict):
+    if hasattr(model, "multimodal_io_dict") and isinstance(
+        model.multimodal_io_dict, (dict, nn.ModuleDict)
+    ):
         for key, io_module in model.multimodal_io_dict.items():
             if isinstance(io_module, nn.Module) and next(io_module.parameters(), None) is not None:
                 fully_shard(io_module, **fsdp_config)
                 logger.info(f"FSDP wrapped: multimodal_io_dict[{key}]")
 
     # 6. Shard adaptor (each module in the dict)
-    if hasattr(model, "adaptor") and isinstance(model.adaptor, dict):
+    if hasattr(model, "adaptor") and isinstance(
+        model.adaptor, (dict, nn.ModuleDict)
+    ):
         for key, adaptor_module in model.adaptor.items():
             if isinstance(adaptor_module, nn.Module) and next(adaptor_module.parameters(), None) is not None:
                 fully_shard(adaptor_module, **fsdp_config)
                 logger.info(f"FSDP wrapped: adaptor[{key}]")
 
-    # 7. Top-level FSDP wrap to make all remaining params DTensors
+    # 7. Top-level FSDP wrap
     fully_shard(model, **fsdp_config)
 
-    # 9. Set up explicit prefetching to overlap communication with compute
-    if hasattr(model, "model") and hasattr(model.model, "layers"):
-        _setup_fsdp_prefetching(model, is_moe)
+    # # 9. Set up explicit prefetching to overlap communication with compute
+    # if hasattr(model, "model") and hasattr(model.model, "layers"):
+    #     _setup_fsdp_prefetching(model, is_moe)
 
-    mode = "HSDP" if parallel_dims.dp_replicate_enabled else "FSDP2"
-    if is_moe:
-        mode += " with EP"
-    logger.info(f"Applied {mode} to Qwen3 model")
+    # mode = "HSDP" if parallel_dims.dp_replicate_enabled else "FSDP2"
+    # if is_moe:
+    #     mode += " with EP"
+    # logger.info(f"Applied {mode} to Qwen3 model")
 
     return model
 

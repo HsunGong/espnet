@@ -24,7 +24,7 @@ model:
         dtype: bfloat16
         compile_transformer_body: false
         freeze_text_embeddings: false
-    activation_checkpointing: true
+    activation_checkpointing: false
 
 preprocessor:
     audio_input: continuous_audio
@@ -34,7 +34,7 @@ preprocessor:
 
 data_loading:
     batchfy_method: pack
-    batch_size: 20000
+    batch_size: 8000
     save_loader_state: false
     seed: 43
     num_workers: 6
@@ -71,10 +71,10 @@ trainer:
         activation_checkpoint: false
 
         # Torch Compile
-        compile: true
-        compile_mode: max-autotune
+        compile: false
+        # compile_mode: max-autotune
 
         # FSDP
-        reshard_after_forward: never  # Faster when memory is abundant
+        reshard_after_forward: default  # Faster when memory is abundant
         dp_shard: 8
         dp_replicate: 1

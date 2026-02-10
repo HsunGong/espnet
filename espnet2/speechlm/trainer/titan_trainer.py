@@ -25,6 +25,7 @@ from torch.distributed.checkpoint.state_dict import (
     set_optimizer_state_dict,
     StateDictOptions,
 )
+from torch.distributed.tensor import DTensor
 from torchtitan.distributed import utils as dist_utils
 
 from espnet2.speechlm.utils.data import to_device
@@ -373,12 +374,17 @@ class TitanTrainer:
             # Backward pass
             out["loss"].backward()
 
-            # Gradient clipping (use TorchTitan's version for EP support)
+            # Gradient clipping: TorchTitan's EP-aware version requires DTensors,
+            # so split params for models with non-FSDP modules (e.g. multimodal IO).
+            fsdp_params = [p for p in self.model.parameters() if isinstance(p, DTensor)]
+            non_fsdp_params = [p for p in self.model.parameters() if not isinstance(p, DTensor)]
             grad_norm = dist_utils.clip_grad_norm_(
-                self.model.parameters(),
+                fsdp_params,
                 self.max_norm,
                 ep_enabled=self.parallel_dims.ep_enabled,
             )
+            if non_fsdp_params:
+                torch.nn.utils.clip_grad_norm_(non_fsdp_params, self.max_norm)
 
             # Optimizer step
             self.optimizer.step()
