@@ -11,15 +11,12 @@ import sys
 import os
 from pathlib import Path
 
-import deepspeed
 import torch
 import wandb
 import yaml
 
 from espnet2.speechlm.dataloader.iterator import DataIteratorFactory
 from espnet2.speechlm.model import _all_job_types
-from espnet2.speechlm.trainer.deepspeed_trainer import DeepSpeedTrainer
-from espnet2.speechlm.trainer.titan_trainer import TitanTrainer
 
 
 def get_parser() -> argparse.ArgumentParser:
@@ -172,6 +169,7 @@ def main():
 
     # Initialize distributed - different approach for each trainer type
     if trainer_type == "deepspeed":
+        import deepspeed
         deepspeed.init_distributed()
     else:
         # For TorchTitan, use standard PyTorch distributed init
@@ -299,8 +297,10 @@ def main():
     )
 
     if trainer_type == "deepspeed":
+        from espnet2.speechlm.trainer.deepspeed_trainer import DeepSpeedTrainer
         trainer = DeepSpeedTrainer(**trainer_kwargs)
     elif trainer_type == "titan":
+        from espnet2.speechlm.trainer.titan_trainer import TitanTrainer
         trainer = TitanTrainer(**trainer_kwargs)
     else:
         raise ValueError(
