@@ -4,11 +4,8 @@
 """Parallelization utilities for SpeechLM models.
 
 This module provides model-specific parallelization strategies for different
-model architectures. Each strategy applies FSDP, activation checkpointing,
-and other parallelization techniques optimized for that model structure.
-
-The unified qwen3 strategy auto-detects MoE models and applies appropriate
-parallelization (EP for MoE, standard FSDP for dense).
+model architectures. Each strategy applies FSDP2 wrapping optimized for
+that model structure.
 
 Usage:
     from espnet2.speechlm.model.speechlm.parallel_utils import (
@@ -20,7 +17,6 @@ Usage:
     parallel_dims, local_rank, global_rank = init_parallel_dims(titan_config)
 
     # Get the parallelization function for a specific model
-    # Works for both dense Qwen3 and Qwen3-MoE (auto-detected)
     parallelize_fn = parallel_strategies["qwen3"]
     model = parallelize_fn(model, parallel_dims, titan_config)
 """
@@ -34,7 +30,6 @@ from espnet2.speechlm.model.speechlm.parallel_utils.qwen3 import (
 
 # Registry of parallelization strategies for different model series
 # Each function has signature: (model, parallel_dims, titan_config) -> model
-# Note: "qwen3" handles both dense and MoE models via auto-detection
 parallel_strategies = {
     "qwen3": parallelize_qwen3_hf,
 }

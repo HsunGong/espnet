@@ -34,7 +34,7 @@ preprocessor:
 
 data_loading:
     batchfy_method: pack
-    batch_size: 8000
+    batch_size: 16384
     save_loader_state: false
     seed: 43
     num_workers: 6
@@ -60,21 +60,22 @@ trainer:
 
     titan_config:
         parallel_strategy: qwen3
-        # Communication
+
+        # Mixed Precision
         mixed_precision_param: bfloat16
         mixed_precision_reduce: bfloat16
 
         # Gradient Clipping
         gradient_clipping: 1.0
 
-        # Activation Checkpointing
-        activation_checkpoint: false
+        # Activation Checkpointing (ratio of transformer layers, 0.0-1.0)
+        activation_checkpoint: 0.4
 
-        # Torch Compile
-        compile: false
-        # compile_mode: max-autotune
+        # Torch Compile (applied to transformer layers)
+        compile: true
+        compile_mode: default
 
         # FSDP
-        reshard_after_forward: default  # Faster when memory is abundant
+        reshard_after_forward: true
         dp_shard: 8
         dp_replicate: 1

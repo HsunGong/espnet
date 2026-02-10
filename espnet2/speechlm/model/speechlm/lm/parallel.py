@@ -219,6 +219,7 @@ def build_parallel_hf_class(model_hf_tag):
                 inputs_embeds=inputs_embeds,
                 position_ids=position_ids,
                 output_router_logits=True,
+                use_cache=False,
             )
 
             # Add stream embeddings to create stream-specific representations
