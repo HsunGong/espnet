@@ -514,7 +514,14 @@ class DiscreteAudioIO(AbsIO):
         # Remove vocabulary offsets to get original token indices
         for stream_idx in range(self.codec_n_streams):
             global_stream_idx = self.ssl_n_streams + stream_idx
-            offset_start, _ = self._stream_intervals[global_stream_idx]
+            offset_start, offset_end = self._stream_intervals[global_stream_idx]
+
+            # NOTE(Jinchuan): Maybe need a warning if this triggers?
+            codec_codes[..., stream_idx] = torch.clip(
+                codec_codes[..., stream_idx],
+                min=offset_start + 1,
+                max=offset_end - 1,
+            )
 
             codec_codes[..., stream_idx] -= offset_start + 1
 
@@ -680,7 +687,7 @@ class DiscreteAudioIO(AbsIO):
         wav, sr = data
 
         assert wav.ndim == 2, "Audio array must be 2D: [num_channels, num_samples]"
-        wav = wav[:1] # Use only first channel for tokenization
+        wav = wav[:1]  # Use only first channel for tokenization
 
         # Resample if sample rate doesn't match
         if sr != self.sample_rate:
@@ -1117,8 +1124,7 @@ class ContinuousAudioIO(AbsIO):
         dummy_frames = 4  # Minimal number of frames
         # Input format: [batch, time, n_mels] (spectrogram features)
         dummy_data = torch.zeros(
-            1, dummy_frames, n_mels,
-            device=ref_tensor.device, dtype=ref_tensor.dtype
+            1, dummy_frames, n_mels, device=ref_tensor.device, dtype=ref_tensor.dtype
         )
         dummy_length = torch.tensor(
             [dummy_frames], device=ref_tensor.device, dtype=torch.long
