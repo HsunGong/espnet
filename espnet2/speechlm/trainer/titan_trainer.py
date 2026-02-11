@@ -370,9 +370,11 @@ class TitanTrainer:
             # Backward pass
             out["loss"].backward()
 
-            # Gradient clipping (torchtitan version handles DTensor/FSDP2)
+            # Gradient clipping (torchtitan version handles DTensor/FSDP2/EP)
             grad_norm = dist_utils.clip_grad_norm_(
-                self.model.parameters(), self.max_norm
+                self.model.parameters(),
+                self.max_norm,
+                ep_enabled=self.parallel_dims.ep_enabled,
             )
 
             # Optimizer step
