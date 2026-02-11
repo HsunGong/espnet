@@ -34,7 +34,7 @@ preprocessor:
 
 data_loading:
     batchfy_method: pack
-    batch_size: 16384
+    batch_size: 8192
     save_loader_state: false
     seed: 43
     num_workers: 6
@@ -45,6 +45,7 @@ trainer:
     max_step: 700000
     save_interval: 5000
     log_interval: 1
+    gradient_accumulation_steps: 4
 
     optimizer:
         name: AdamW
@@ -69,11 +70,10 @@ trainer:
         gradient_clipping: 1.0
 
         # Activation Checkpointing (ratio of transformer layers, 0.0-1.0)
-        activation_checkpoint: 0.4
+        activation_checkpoint: 0.0
 
         # Torch Compile (applied to transformer layers)
         compile: true
-        compile_mode: default
 
         # FSDP
         reshard_after_forward: true

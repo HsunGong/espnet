@@ -78,6 +78,14 @@ def parallelize_qwen3_hf(
     if parallel_dims.ep_enabled:
         model = apply_expert_parallel_qwen3(model, parallel_dims)
 
+        # Attach load balancing loss function for MoE auxiliary loss.
+        # This is a standalone function in HF transformers that must be
+        # explicitly bound to the model for ParallelLLM._loss() to use it.
+        from transformers.models.qwen3_moe.modeling_qwen3_moe import (
+            load_balancing_loss_func,
+        )
+        model.load_balancing_loss_func = load_balancing_loss_func
+
     # 2. Activation Checkpointing
     ac_ratio = titan_config.get("activation_checkpoint", 0.0)
     if ac_ratio:
@@ -232,7 +240,64 @@ def apply_fsdp_qwen3(
         if isinstance(module, nn.Module):
             _unshard(module)
 
+    # (4) Set up explicit FSDP prefetching when EP is enabled
+    _setup_fsdp_prefetching(model, ep_enabled)
+
     return model
+
+
+def _setup_fsdp_prefetching(model: nn.Module, ep_enabled: bool):
+    """Set up explicit FSDP forward/backward prefetching for transformer layers.
+
+    When EP is enabled, D2H syncs in EP can interfere with FSDP's implicit
+    prefetching. Explicit prefetching ensures the next layer's params are
+    all-gathered while the current layer computes. Follows torchtitan's pattern.
+    """
+    if not ep_enabled:
+        return
+
+    layers = list(model.model.layers)
+    if not layers:
+        return
+
+    # Forward: embed_tokens prefetches layer[0]; layer[i] prefetches layer[i+1]
+    if hasattr(model.model.embed_tokens, "set_modules_to_forward_prefetch"):
+        model.model.embed_tokens.set_modules_to_forward_prefetch([layers[0]])
+
+    for i in range(len(layers) - 1):
+        layer = layers[i]
+        next_layer = layers[i + 1]
+        if not hasattr(layer, "set_modules_to_forward_prefetch"):
+            continue
+        if isinstance(next_layer.mlp, ExpertParallelMoeBlock):
+            layer.set_modules_to_forward_prefetch(
+                [next_layer, next_layer.mlp.experts]
+            )
+        else:
+            layer.set_modules_to_forward_prefetch([next_layer])
+
+    # Backward: layer[i] prefetches layer[i-1]; layer[0] prefetches embed_tokens
+    reversed_layers = list(reversed(layers))
+    for i in range(len(reversed_layers) - 1):
+        layer = reversed_layers[i]
+        prev_layer = reversed_layers[i + 1]
+        if not hasattr(layer, "set_modules_to_backward_prefetch"):
+            continue
+        if isinstance(prev_layer.mlp, ExpertParallelMoeBlock):
+            layer.set_modules_to_backward_prefetch(
+                [prev_layer, prev_layer.mlp.experts]
+            )
+        else:
+            layer.set_modules_to_backward_prefetch([prev_layer])
+
+    if hasattr(reversed_layers[-1], "set_modules_to_backward_prefetch"):
+        reversed_layers[-1].set_modules_to_backward_prefetch(
+            [model.model.embed_tokens]
+        )
+
+    logger.info(
+        f"Set up explicit FSDP prefetching for {len(layers)} layers (EP enabled)"
+    )
 
 
 def apply_activation_checkpoint_qwen3(
@@ -252,17 +317,18 @@ def apply_activation_checkpoint_qwen3(
         Model with activation checkpointing applied
     """
     num_layers = len(model.model.layers)
-    ac_freq = max(1, round(1.0 / ratio))
+    num_to_checkpoint = max(1, round(num_layers * ratio))
 
+    # Evenly space checkpointed layers across the stack
     count = 0
-    for idx, layer in enumerate(model.model.layers):
-        if idx % ac_freq == 0:
-            model.model.layers[idx] = checkpoint_wrapper(layer)
+    for idx in range(num_layers):
+        if count < num_to_checkpoint and (idx + 1) * num_to_checkpoint > count * num_layers:
+            model.model.layers[idx] = checkpoint_wrapper(model.model.layers[idx])
             count += 1
 
     logger.info(
         f"Applied activation checkpointing to {count}/{num_layers} layers "
-        f"(ratio={ratio}, freq=every {ac_freq})"
+        f"(ratio={ratio})"
     )
     return model
 
@@ -286,6 +352,8 @@ def apply_torch_compile_qwen3(
     compile_mode = titan_config.get("compile_mode", "default")
 
     torch._dynamo.config.capture_scalar_outputs = True
+    # Disable LRU cache to prevent recompilation from MoE dynamic shapes
+    torch._C._dynamo.eval_frame._set_lru_cache(False)
 
     for idx, layer in enumerate(model.model.layers):
         model.model.layers[idx] = torch.compile(layer, mode=compile_mode)

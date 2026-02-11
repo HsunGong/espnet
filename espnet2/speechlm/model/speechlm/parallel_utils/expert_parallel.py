@@ -36,6 +36,13 @@ from transformers.models.qwen3_moe.modeling_qwen3_moe import (
     Qwen3MoeSparseMoeBlock,
 )
 
+try:
+    from torchtitan.models.moe.utils import _permute, _unpermute
+
+    _TRITON_PERMUTE_AVAILABLE = True
+except ImportError:
+    _TRITON_PERMUTE_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -115,10 +122,10 @@ class GroupedExperts(nn.Module):
 
         # SwiGLU: out = down_proj(silu(gate_proj(x)) * up_proj(x))
         # torch._grouped_mm requires bfloat16 inputs
-        x_bf16 = x.bfloat16()
-        w1_t = w1.bfloat16().transpose(-2, -1)
-        w3_t = w3.bfloat16().transpose(-2, -1)
-        w2_t = w2.bfloat16().transpose(-2, -1)
+        x_bf16 = x if x.dtype == torch.bfloat16 else x.bfloat16()
+        w1_t = w1.transpose(-2, -1) if w1.dtype == torch.bfloat16 else w1.bfloat16().transpose(-2, -1)
+        w3_t = w3.transpose(-2, -1) if w3.dtype == torch.bfloat16 else w3.bfloat16().transpose(-2, -1)
+        w2_t = w2.transpose(-2, -1) if w2.dtype == torch.bfloat16 else w2.bfloat16().transpose(-2, -1)
 
         h = F.silu(torch._grouped_mm(x_bf16, w1_t, offs=offsets))
         h = h * torch._grouped_mm(x_bf16, w3_t, offs=offsets)
@@ -231,14 +238,12 @@ class ExpertParallelMoeBlock(Qwen3MoeSparseMoeBlock):
         sorted_tokens = hidden_states_flat[sorted_token_indices]  # (T*K, D)
 
         # --- Step 3: Count tokens per expert ---
-        num_tokens_per_expert = torch.zeros(
-            self.num_experts, dtype=torch.long, device=hidden_states.device
-        )
-        num_tokens_per_expert.scatter_add_(
-            0,
-            flat_expert_indices.long(),
-            torch.ones_like(flat_expert_indices, dtype=torch.long),
-        )
+        num_tokens_per_expert = torch.histc(
+            flat_expert_indices.float(),
+            bins=self.num_experts,
+            min=0,
+            max=self.num_experts,
+        ).long()
 
         # --- Step 4: All-to-all dispatch ---
         # Exchange per-expert counts across EP ranks
@@ -255,13 +260,14 @@ class ExpertParallelMoeBlock(Qwen3MoeSparseMoeBlock):
             input_splits = (
                 num_tokens_per_expert.view(self.ep_size, -1)
                 .sum(dim=1)
-                .cpu()
-                .tolist()
+                .to("cpu", non_blocking=True)
             )
             # output_splits[j] = total tokens this rank receives from rank j
             output_splits = (
                 recv_counts.view(self.ep_size, -1).sum(dim=1).cpu().tolist()
             )
+            # Materialize input_splits after output_splits blocking transfer
+            input_splits = input_splits.tolist()
 
         # Dispatch tokens to expert-owning ranks
         dispatched_tokens = all_to_all_single_autograd(
@@ -278,33 +284,44 @@ class ExpertParallelMoeBlock(Qwen3MoeSparseMoeBlock):
         #   [e0_r0, e0_r1, ..., e0_rN, e1_r0, e1_r1, ..., e1_rN, ...]
         total_recv = sum(output_splits)
         if total_recv > 0:
-            # Build per-token local expert ids matching (rank, expert) layout
-            local_expert_ids = torch.arange(
-                self.experts_per_rank, device=hidden_states.device
-            ).repeat(self.ep_size)  # [0,1,..,K-1, 0,1,..,K-1, ...]
-            token_expert_ids = local_expert_ids.repeat_interleave(recv_counts)
+            if _TRITON_PERMUTE_AVAILABLE:
+                # Triton kernel: permute to (expert, rank) order with
+                # alignment padding for better grouped_mm performance
+                input_shape, permuted_tokens, permuted_indices, aligned_counts = (
+                    _permute(
+                        dispatched_tokens,
+                        recv_counts,
+                        self.ep_size,
+                        self.experts_per_rank,
+                    )
+                )
+                processed_tokens = self.experts(
+                    permuted_tokens, aligned_counts
+                )
+                output_tokens = _unpermute(
+                    processed_tokens, input_shape, permuted_indices
+                )
+            else:
+                # Fallback: argsort-based permutation
+                local_expert_ids = torch.arange(
+                    self.experts_per_rank, device=hidden_states.device
+                ).repeat(self.ep_size)
+                token_expert_ids = local_expert_ids.repeat_interleave(recv_counts)
+                permute_order = token_expert_ids.argsort(stable=True)
+                permuted_tokens = dispatched_tokens[permute_order]
 
-            # Stable argsort reorders to (expert, rank) — within same expert,
-            # tokens from rank 0 come first, then rank 1, etc.
-            permute_order = token_expert_ids.argsort(stable=True)
-            permuted_tokens = dispatched_tokens[permute_order]
+                num_tokens_per_local_expert = recv_counts.view(
+                    self.ep_size, self.experts_per_rank
+                ).sum(dim=0)
+                processed_tokens = self.experts(
+                    permuted_tokens, num_tokens_per_local_expert
+                )
 
-            # Per-local-expert token counts for grouped_mm offsets
-            num_tokens_per_local_expert = recv_counts.view(
-                self.ep_size, self.experts_per_rank
-            ).sum(dim=0)
-
-            # Fused grouped_mm computation
-            processed_tokens = self.experts(
-                permuted_tokens, num_tokens_per_local_expert
-            )
-
-            # Reverse permutation back to (rank, expert) order for combine
-            unpermute_order = torch.empty_like(permute_order)
-            unpermute_order[permute_order] = torch.arange(
-                total_recv, device=hidden_states.device
-            )
-            output_tokens = processed_tokens[unpermute_order]
+                unpermute_order = torch.empty_like(permute_order)
+                unpermute_order[permute_order] = torch.arange(
+                    total_recv, device=hidden_states.device
+                )
+                output_tokens = processed_tokens[unpermute_order]
         else:
             output_tokens = dispatched_tokens
 

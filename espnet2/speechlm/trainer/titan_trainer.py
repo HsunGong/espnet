@@ -7,6 +7,7 @@ This trainer uses FSDP2 for data parallelism, providing an alternative to
 DeepSpeed-based training. It maintains interface compatibility with DeepSpeedTrainer.
 """
 
+import gc
 import logging
 import math
 import time
@@ -105,6 +106,9 @@ class TitanTrainer:
         self.max_step = trainer_args["max_step"]
         self.save_interval = trainer_args["save_interval"]
         self.log_interval = trainer_args["log_interval"]
+        self.gradient_accumulation_steps = trainer_args.get(
+            "gradient_accumulation_steps", 1
+        )
 
         # Freeze parameters
         for t in trainer_args.get("freeze_param", []):
@@ -143,12 +147,21 @@ class TitanTrainer:
         # Load checkpoint if exists
         self._load_checkpoint(resume_path)
 
+        # Disable automatic GC to prevent distributed straggler issues.
+        # Random GC pauses on one rank stall all ranks at collectives.
+        # We run a lightweight gen-1 collection every gc_freq steps instead.
+        self.gc_freq = titan_config.get("gc_freq", 1000)
+        gc.disable()
+        gc.collect()
+        logger.info(f"Disabled automatic GC, will collect every {self.gc_freq} steps")
+
         # Log configuration
         wandb.config.update({"titan_config": titan_config})
         logger.info("Successfully initialized TitanTrainer with configuration:")
         logger.info(f"  FSDP enabled: {self.parallel_dims.fsdp_enabled}")
         logger.info(f"  dp_shard: {self.parallel_dims.dp_shard}")
         logger.info(f"  dp_replicate: {self.parallel_dims.dp_replicate}")
+        logger.info(f"  gradient_accumulation_steps: {self.gradient_accumulation_steps}")
 
     def _build_optimizer_scheduler(self):
         """Create optimizer and LR scheduler after parallelization."""
@@ -350,30 +363,57 @@ class TitanTrainer:
         logger.info("Training completed!")
 
     def train(self) -> None:
-        """Execute one training epoch (save_interval steps)."""
-        self.model.train()
+        """Execute one training epoch (save_interval optimizer steps).
 
+        With gradient accumulation, each optimizer step consumes
+        ``gradient_accumulation_steps`` micro-batches. The iterator is
+        sized so that ``save_interval`` optimizer steps are performed.
+        """
+        self.model.train()
+        grad_accum = self.gradient_accumulation_steps
+
+        # Request enough micro-batches for save_interval optimizer steps.
+        # Use global_step directly as batch offset (not multiplied by
+        # grad_accum) so checkpoint resume is independent of grad_accum.
         iterator = self.train_data_factory.build_iter(
             global_step=self.global_step,
-            length=self.save_interval,
+            length=self.save_interval * grad_accum,
         )
+        data_iter = iter(iterator)
 
-        for batch in iterator:
+        for _ in range(self.save_interval):
             iter_start = time.time()
-
-            batch = to_device(batch, self.device, dtype=self.dtype)
-
-            # Forward pass
             self.optimizer.zero_grad(set_to_none=True)
-            out = self.model(**batch)
 
-            # Backward pass
-            out["loss"].backward()
+            # Accumulate gradients over micro-batches
+            accumulated_stats = {}
+            for _micro in range(grad_accum):
+                try:
+                    batch = next(data_iter)
+                except StopIteration:
+                    break
+                batch = to_device(batch, self.device, dtype=self.dtype)
+
+                out = self.model(**batch)
+                loss = out["loss"] / grad_accum
+                loss.backward()
+
+                # Accumulate stats (sum, will average later)
+                for k, v in out["stats"].items():
+                    if k not in accumulated_stats:
+                        accumulated_stats[k] = v.detach()
+                    else:
+                        accumulated_stats[k] = accumulated_stats[k] + v.detach()
+
+            # Average stats over micro-batches
+            for k in accumulated_stats:
+                accumulated_stats[k] = accumulated_stats[k] / grad_accum
 
             # Gradient clipping (torchtitan version handles DTensor/FSDP2/EP)
             grad_norm = dist_utils.clip_grad_norm_(
                 self.model.parameters(),
                 self.max_norm,
+                foreach=True,
                 ep_enabled=self.parallel_dims.ep_enabled,
             )
 
@@ -381,12 +421,12 @@ class TitanTrainer:
             self.optimizer.step()
             self.lr_scheduler.step()
 
-            # Collect and sync statistics
-            stats = out["stats"]
-            self._all_reduce_stats(stats)
-
-            # Format stats for logging
-            stats = {f"train/{k}": float(v.cpu()) for k, v in stats.items()}
+            # Sync and log statistics
+            self._all_reduce_stats(accumulated_stats)
+            stats = {
+                f"train/{k}": float(v.cpu())
+                for k, v in accumulated_stats.items()
+            }
             stats["train/lr"] = self.lr_scheduler.get_last_lr()[0]
             stats["train/grad_norm"] = (
                 grad_norm.item() if isinstance(grad_norm, torch.Tensor) else grad_norm
@@ -396,9 +436,14 @@ class TitanTrainer:
             # Log to wandb
             wandb.log(stats, step=self.global_step)
 
-            # Console logging (rank 0 only)
+            # Console logging (rank 0 only, 4 significant digits)
             if self.global_rank == 0 and self.global_step % self.log_interval == 0:
-                logger.info(f"step {self.global_step}, stats: {stats}")
+                short = {k: f"{v:.4g}" for k, v in stats.items()}
+                logger.info(f"step {self.global_step}, stats: {short}")
+
+            # Periodic lightweight GC to reclaim memory without straggler stalls
+            if self.global_step > 1 and self.global_step % self.gc_freq == 0:
+                gc.collect(1)
 
             self.global_step += 1
 
@@ -434,4 +479,5 @@ class TitanTrainer:
             wandb.log(all_stats, step=self.global_step)
 
             if self.global_rank == 0:
-                logger.info(f"Validation [{name}]: {all_stats}")
+                short = {k: f"{v:.4g}" for k, v in all_stats.items()}
+                logger.info(f"Validation [{name}]: {short}")

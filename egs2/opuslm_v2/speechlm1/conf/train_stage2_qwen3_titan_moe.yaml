@@ -34,7 +34,7 @@ preprocessor:
 
 data_loading:
     batchfy_method: pack
-    batch_size: 16384
+    batch_size: 4096
     save_loader_state: false
     seed: 43
     num_workers: 6
@@ -45,6 +45,7 @@ trainer:
     max_step: 700000
     save_interval: 5000
     log_interval: 1
+    gradient_accumulation_steps: 8
 
     optimizer:
         name: AdamW
@@ -69,9 +70,9 @@ trainer:
         gradient_clipping: 1.0
 
         # Activation Checkpointing (all layers for MoE memory savings)
-        activation_checkpoint: 0.5
+        activation_checkpoint: 0.0
 
-        # Torch Compile (disabled for MoE debugging)
+        # Torch Compile
         compile: true
 
         # FSDP

@@ -425,8 +425,7 @@ def build_parallel_hf_class(model_hf_tag):
             # Apply loss masks and compute weighted average
             loss = loss * loss_mask
             count = (loss_mask != 0.0).float()
-            loss = loss.sum() / count[:, :, 0].sum()
-            stats["loss"] = loss.clone().detach()
+            ce_loss = loss.sum() / count[:, :, 0].sum()
 
             # Compute accuracy statistics during evaluation
             if not self.training:
@@ -445,8 +444,13 @@ def build_parallel_hf_class(model_hf_tag):
                     self.config.num_experts,
                     self.config.num_experts_per_tok,
                 )
-                loss = loss + aux_loss * self.config.router_aux_loss_coef
-                stats["moe_balance_loss"] = aux_loss.clone().detach()
+                loss = ce_loss + aux_loss * self.config.router_aux_loss_coef
+                stats["ce_loss"] = ce_loss.clone().detach()
+                stats["load_balance_loss"] = aux_loss.clone().detach()
+            else:
+                loss = ce_loss
+
+            stats["loss"] = loss.clone().detach()
 
             return loss, stats
 
