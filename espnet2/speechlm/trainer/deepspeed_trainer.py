@@ -96,7 +96,7 @@ class DeepSpeedTrainer:
         )
         logger.info("Successfully initialize DeepSpeed with configuration")
         logger.info(json.dumps(ds_config, indent=2))
-        wandb.config.update({"deepspeed_config": ds_config})
+        wandb.config.update({"deepspeed_config": ds_config}, allow_val_change=True)
 
         # Load checkpoint
         self._load_checkpoint(resume_path)
@@ -126,6 +126,7 @@ class DeepSpeedTrainer:
                     reverse=True,
                 )[0]
 
+        print('so far the checkpoint is: ', checkpoint_path, flush=True)
         # Load from Deepspeed checkpoint for both weights and optimizer states
         if checkpoint_path and checkpoint_path.is_dir():
             _, client_state = self.model_engine.load_checkpoint(str(checkpoint_path))

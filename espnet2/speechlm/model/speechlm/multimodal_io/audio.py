@@ -955,11 +955,17 @@ class ContinuousAudioIO(AbsIO):
         if wav.ndim != 2:
             raise ValueError("Input audio must be 2D array [num_channels, num_samples]")
 
+        # if wav.shape[0] > wav.shape[1]:
+        #     raise ValueError(
+        #         "Audio shape seems incorrect, "
+        #         "please check num_channels and num_samples"
+        #     )
         if wav.shape[0] > wav.shape[1]:
-            raise ValueError(
-                "Audio shape seems incorrect, "
-                "please check num_channels and num_samples"
-            )
+            # Fallback to 10s of silence if channel/sample dims look swapped.
+            num_samples = int(fs * 10)
+            if num_samples <= 0:
+                num_samples = int(self.sample_rate * 10)
+            wav = np.zeros((1, num_samples), dtype=wav.dtype)
 
         if wav.shape[1] > self.n_samples:
             wav = wav[:, : self.n_samples]

@@ -143,9 +143,17 @@ def load_checkpoint(model, checkpoint_path):
     return model
 
 
+def split_specifiers(specifier_text: str) -> list[str]:
+    """Split space-separated dataset specifiers into a clean list."""
+    if not specifier_text:
+        return []
+    return [item for item in specifier_text.split() if item]
+
+
 @torch.no_grad()
 def inference_worker(
     rank: int,
+    num_worker: int,
     world_size: int,
     train_config_path: Path,
     inference_config_path: Path,
@@ -158,9 +166,17 @@ def inference_worker(
     """Worker process for inference with data sharding."""
     # Set up logger for this worker
     logger = setup_worker_logger(rank)
-    logger.info(f"Starting inference worker (rank {rank}/{world_size})")
 
-    torch.cuda.set_device(f"cuda:{rank}")
+    device_id = rank // num_worker
+    torch.cuda.set_device(f"cuda:{device_id}")
+    logger.info(f"Starting inference worker (rank {rank}/{world_size}) with cuda = cuda:{device_id}")
+
+    # Reset random seed for each sample for independent reproducibility
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
     # Load configs in worker
     with open(train_config_path, "r") as f:
@@ -181,62 +197,70 @@ def inference_worker(
     model = model.to(device="cuda", dtype=dtype).eval()
     preprocessor = job_template.build_preprocessor()
 
-    # Build data iterator with sharding
-    iterator_factory = DataIteratorFactory(
-        unregistered_specifier=unregistered_specifier,
-        registered_specifier=registered_specifier,
-        collate_fn=preprocessor.collate_fn,
-        num_workers=0,
-        rank=rank,
-        world_size=world_size,
-        sequential_load=True,
+    use_registered_specifier = bool(registered_specifier.strip())
+    specifiers = split_specifiers(
+        registered_specifier if use_registered_specifier else unregistered_specifier
     )
 
-    output_dir = output_dir / f"inference_rank{rank}"
-    output_dir.mkdir(exist_ok=True, parents=True)
-    output_file = output_dir / "results.json"
+    if not specifiers:
+        logger.warning("No valid dataset specifiers found. Worker exits.")
+        return
 
-    test_iterator = iterator_factory.build_iter()
-    results = dict()
-    logger.info("Starting inference on data shard")
+    for dataset_specifier in specifiers:
+        logger.info(f"Starting inference on dataset: {dataset_specifier}")
 
-    for idx, sample in enumerate(test_iterator):
+        # Build data iterator with sharding
+        iterator_factory = DataIteratorFactory(
+            unregistered_specifier=("" if use_registered_specifier else dataset_specifier),
+            registered_specifier=(dataset_specifier if use_registered_specifier else ""),
+            collate_fn=preprocessor.collate_fn,
+            num_workers=0,
+            rank=rank,
+            world_size=world_size,
+            sequential_load=True,
+        )
 
-        sample = to_device(sample, "cuda", dtype=dtype)
-        task, data_name, example_id = sample.pop("keys")[0]
+        dataset_output_dir = (
+            output_dir / dataset_specifier.replace(":", "_") / f"inference_rank{rank}"
+        )
+        dataset_output_dir.mkdir(exist_ok=True, parents=True)
+        output_file = dataset_output_dir / "results.json"
 
-        # Reset random seed for each sample for independent reproducibility
-        random.seed(seed)
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
+        test_iterator = iterator_factory.build_iter()
+        results = dict()
 
-        logger.info(f"Processing sample {idx}: {task}/{data_name}/{example_id}")
-        messages, _ = model.inference(inference_config, **sample)
-
-        for idx, (role, modality, content) in enumerate(messages):
-            if modality == "audio":
-                audio, length, sample_rate = content
-                audio, length = audio[0], length[0]
-                audio = audio.cpu().float().numpy()
-
-                content = output_dir / f"{example_id}_segment{idx+1}.wav"
-                sf.write(content, audio.T, sample_rate)
-
-                messages[idx][2] = str(content)
+        for sample_idx, sample in enumerate(test_iterator):
+            # print(sample)
+            sample = to_device(sample, "cuda", dtype=dtype)
+            task, data_name, example_id = sample.pop("keys")[0]
 
             logger.info(
-                f"Segment {idx}, role={role}, modality={modality}, content={content}"
+                f"Processing sample {sample_idx}: {task}/{data_name}/{example_id}"
             )
-        
-        results[example_id] = messages
-        with open(output_file, "wb") as writer:
-            writer.write(
-                json.dumps(
-                    results, indent=4, ensure_ascii=False, sort_keys=False
-                ).encode("utf_8")
-            )
+            messages, _ = model.inference(inference_config, **sample)
+
+            for seg_idx, (role, modality, content) in enumerate(messages):
+                if modality == "audio":
+                    audio, length, sample_rate = content
+                    audio, length = audio[0], length[0]
+                    audio = audio.cpu().float().numpy()
+
+                    content = dataset_output_dir / f"{example_id}_segment{seg_idx+1}.wav"
+                    sf.write(content, audio.T, sample_rate)
+
+                    messages[seg_idx][2] = str(content)
+
+                logger.info(
+                    f"Segment {seg_idx}, role={role}, modality={modality}, content={content}"
+                )
+
+            results[example_id] = messages
+            with open(output_file, "wb") as writer:
+                writer.write(
+                    json.dumps(
+                        results, indent=4, ensure_ascii=False, sort_keys=False
+                    ).encode("utf_8")
+                )
 
 
 def main():
@@ -258,8 +282,7 @@ def main():
             "--test-unregistered-specifier"
         )
 
-    specifier = args.test_registered_specifier or args.test_unregistered_specifier
-    output_dir = args.output_dir / specifier.replace(":", "_")
+    output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
     mp.set_start_method("spawn", force=True)
@@ -273,6 +296,7 @@ def main():
             target=inference_worker,
             args=(
                 rank,
+                args.num_workers,
                 args.world_size * args.num_workers,
                 args.train_config,
                 args.inference_config,

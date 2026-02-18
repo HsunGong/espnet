@@ -29,7 +29,7 @@ mkdir -p ${exp_dir}
 
 inference_config=conf/inference.yaml
 inference_step=-1
-inference_nj=8
+inference_nj=24
 inference_workers=1
 
 . utils/parse_options.sh
@@ -68,7 +68,7 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
       --output-dir ${exp_dir} \
       --resume-path ${resume_path} \
       --save-loader-state \
-      --wandb-mode offline \
+      --wandb-mode online \
       > ${exp_dir}/logs/train_node${node_rank}_${timestamp}.log 2>&1 
 fi
 
@@ -80,36 +80,28 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
     echo "inference_step is not provided. Using the last step: ${inference_step}"
   fi
 
+  mkdir -p  ${exp_dir}/inference/${inference_tag}_step_${inference_step}
   inference_dir=$(realpath ${exp_dir}/inference/${inference_tag}_step_${inference_step})
-  mkdir -p ${inference_dir}
 
   inference_ckpt=(${exp_dir}/checkpoints/step_${inference_step}/global_step*/mp_rank_00_model_states.pt)
   inference_ckpt=${inference_ckpt[0]}
 
-  echo "Start model inference. Log at ${inference_dir}/logs/inference.*.log"
-  for specifier in ${test_registered_specifier}; do
-    echo "Test specifier: ${specifier}. Log at: ${inference_dir}/logs/inference_${specifier//:/_}.*.log"
-    ${cuda_cmd} --gpu 1 JOB=1:${inference_nj} ${inference_dir}/logs/inference_${specifier//:/_}.JOB.log \
-      ../../../espnet2/speechlm/bin/inference.py \
-        --rank JOB --world-size ${inference_nj} \
-        --train-config ${exp_dir}/train.yaml \
-        --inference-config ${inference_config} \
-        --model-checkpoint ${inference_ckpt} \
-        --output-dir ${inference_dir} \
-        --test-registered-specifier "${specifier}" \
-        --num-worker ${inference_workers} &
-  done
-  wait
+  echo "Start model inference. with NJ=${inference_nj} Log at ${inference_dir}/logs/inference.*.log"
+  ${cuda_cmd} --gpu 1 JOB=1:${inference_nj} ${inference_dir}/logs/inference.JOB.log \
+    ../../../espnet2/speechlm/bin/inference.py \
+      --rank JOB --world-size ${inference_nj} \
+      --train-config ${exp_dir}/train.yaml \
+      --inference-config ${inference_config} \
+      --model-checkpoint ${inference_ckpt} \
+      --output-dir ${inference_dir} \
+      --test-registered-specifier "${test_registered_specifier}" \
+      --num-worker ${inference_workers}
   echo "Inference done."
-fi
 
-if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
-  # jq merge all json files into one
   for specifier in ${test_registered_specifier}; do
-    mkdir -p ${inference_dir}/${specifier//:/_}/wavs
-    ln -s ${inference_dir}/${specifier//:/_}/*/*.wav \
-    ${inference_dir}/${specifier//:/_}/wavs/
+    specifier_name=${specifier//:/_}
+    cat ${inference_dir}/${specifier_name}/results_*.jsonl > ${inference_dir}/${specifier_name}/results.jsonl
 
-    jq -s 'add' ${inference_dir}/${specifier//:/_}/*/results.json > ${inference_dir}/${specifier//:/_}/results.json
+    echo "Inference results for ${specifier} are saved at ${inference_dir}/${specifier_name}/results.jsonl"
   done
 fi

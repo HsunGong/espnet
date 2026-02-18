@@ -276,9 +276,9 @@ test_registered_specifier="\
   text_to_audio:librispeech_test_other \
 "
 inference_config=conf/inference.yaml
-inference_step=130000
+inference_step=-1
 inference_nj=4
-inference_workers=3
+inference_workers=1
 
 . utils/parse_options.sh
 
@@ -320,6 +320,11 @@ fi
 
 if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
   inference_tag=$(basename "${inference_config%.*}")
+
+  if [ ${inference_step} -eq -1 ]; then
+    inference_step=$(ls ${exp_dir}/checkpoints | grep step_ | awk -F"step_" '{print $2}' | sort -n | tail -n 1)
+    echo "inference_step is not provided. Using the last step: ${inference_step}"
+  fi
 
   inference_dir=${exp_dir}/inference/${inference_tag}_step_${inference_step}
   mkdir -p ${inference_dir}

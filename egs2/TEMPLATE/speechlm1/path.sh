@@ -36,7 +36,7 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 #     ESPNET_DATASET_REGISTRY+=":/work/nvme/bbjs/shared/opuslm_v2_data/data_curation/stage5_curated_music_gen/registry.yaml"
 # fi
 
-export ESPNET_DATASET_REGISTRY="/mnt/home/jinchuat-andr-d6b58f/jinchuat/data/data_jsons/opuslm_v2.yaml:/mnt/home/jinchuat-andr-d6b58f/jinchuat/espnet_sft/egs2/opuslm_v2/speechlm1/data/sft.yaml:./data/sft.yaml"
+export ESPNET_DATASET_REGISTRY="/mnt/home/jinchuat-andr-d6b58f/jinchuat/data/data_jsons/opuslm_v2.yaml:/mnt/home/jinchuat-andr-d6b58f/jinchuat/espnet_sft/egs2/opuslm_v2/speechlm1/data/sft.yaml:./data/sft.yaml:./data/debug.yaml"
 
 # NOTE(Jinchuan): For DeltaAI users, un-comment this for network setup
 # export NCCL_DEBUG=WARN
