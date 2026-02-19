@@ -201,6 +201,10 @@ def inference_worker(
     inference_config["add_generation_prompt"] = effective_add_gen_prompt
     train_config["add_generation_prompt"] = effective_add_gen_prompt
 
+    # Propagate continuation_prefix_ratio from inference config to train config
+    if "continuation_prefix_ratio" in inference_config:
+        train_config["continuation_prefix_ratio"] = inference_config["continuation_prefix_ratio"]
+
     job_template_class = _all_job_types[train_config["job_type"]]
     job_template = job_template_class(train_config, is_train=False)
 
@@ -309,6 +313,24 @@ def main():
 
     processes = []
     args.rank -= 1  # Rank provided from 1 rather than 0
+    if args.num_workers == 1:
+        # Single worker, run inference directly without multiprocessing
+        inference_worker(
+            rank=args.rank,
+            num_worker=1,
+            world_size=args.world_size,
+            train_config_path=args.train_config,
+            inference_config_path=args.inference_config,
+            model_checkpoint_path=args.model_checkpoint,
+            unregistered_specifier=args.test_unregistered_specifier or "",
+            registered_specifier=args.test_registered_specifier or "",
+            output_dir=output_dir,
+            seed=args.seed,
+            add_generation_prompt=args.add_generation_prompt,
+        )
+        print("Worker=1 Inference completed!")
+        return
+
     start_rank = args.rank * args.num_workers
     end_rank = (args.rank + 1) * args.num_workers
     for rank in range(start_rank, end_rank):

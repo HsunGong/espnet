@@ -124,6 +124,8 @@ class SpeechLMJobTemplate(AbsJobTemplate):
             batchfy_method=self.config["data_loading"].get("batchfy_method", "bucket"),
             audio_cfg=processor_config.get("audio_cfg", 0.0),
             batch_length=self.config["data_loading"].get("batch_size", -1),
+            add_generation_prompt=self.config.get("add_generation_prompt", True),
+            continuation_prefix_ratio=self.config.get("continuation_prefix_ratio", 0.5),
         )
 
     def build_model(self) -> torch.nn.Module:
@@ -169,8 +171,12 @@ class SpeechLMPreprocessor:
         batchfy_method: str = "bucket",
         audio_cfg: float = 0.0,
         batch_length: int = -1,
+        add_generation_prompt: bool = True,
+        continuation_prefix_ratio: float = 0.5,
     ):
         self.is_train = is_train
+        self.add_generation_prompt = add_generation_prompt
+        self.continuation_prefix_ratio = continuation_prefix_ratio
 
         # (1) keep all multimodal_io
         self.multimodal_io = multimodal_io
@@ -318,7 +324,7 @@ class SpeechLMPreprocessor:
         apply_eots = [
             msg1[0] == msg2[0] for msg1, msg2 in zip(messages[:-1], messages[1:])
         ] + [False]
-        for apply_eot, (role, this_io, this_data) in zip(apply_eots, messages):
+        for msg_idx, (apply_eot, (role, this_io, this_data)) in enumerate(zip(apply_eots, messages)):
             apply_loss = float(role == "assistant" or self.loss_region == "all")
             special_mask = self.special_mask(apply_loss)
 
@@ -337,6 +343,48 @@ class SpeechLMPreprocessor:
                 this_data
             )
             assert this_seq.shape == loss_mask.shape
+
+            # For audio continuation: truncate the last assistant audio to a
+            # prefix so the model is genuinely mid-audio and predicts real
+            # continuation tokens instead of EOS.
+            #
+            # Why stripping only n_tail is WRONG:
+            #   The delay-interleaved sequence has length = actual_frames + n_tail.
+            #   Stripping n_tail leaves exactly `actual_frames` positions, where
+            #   the last position has stream-0 = audio_0[actual_frames-1], which
+            #   is the LAST real audio frame. The model is trained to predict
+            #   <eos> for stream-0 immediately after this frame, so it generates
+            #   EOS at step-0 of inference_segment → empty continuation.
+            #
+            # Fix: keep only the first `prefix_ratio * actual_frames` positions.
+            # The last kept position (prefix_frames-1) has stream-0 mid-audio,
+            # and the model naturally predicts the next real audio token.
+            is_last_msg = (msg_idx == len(messages) - 1)
+            if (
+                not self.add_generation_prompt
+                and is_last_msg
+                and self.multimodal_io[this_io].is_discrete
+                and hasattr(self.multimodal_io[this_io], 'delay_interleave')
+                and self.multimodal_io[this_io].delay_interleave
+            ):
+                n_tail = self.multimodal_io[this_io].num_stream() - 1
+                # total delay-interleaved length = actual_frames + n_tail
+                total_length = this_seq.shape[0]
+                actual_frames = total_length - n_tail
+                # Prefix: first prefix_ratio fraction of the actual audio frames.
+                # Use at least n_tail+1 frames so the head padding region is
+                # fully covered and we are guaranteed to be mid-audio.
+                prefix_frames = max(
+                    n_tail + 1,
+                    int(actual_frames * self.continuation_prefix_ratio),
+                )
+                strip = total_length - prefix_frames
+                if strip > 0 and this_seq.shape[0] > strip:
+                    this_seq = this_seq[:-strip]
+                    loss_mask = loss_mask[:-strip]
+                    if conti_feat is not None:
+                        orig_length, feat = conti_feat
+                        conti_feat = (prefix_frames, feat)
 
             # (3.3) this_seq - adjust token IDs and pad to match stream count
             if self.multimodal_io[this_io].is_discrete:
@@ -365,12 +413,19 @@ class SpeechLMPreprocessor:
             accum_length += this_seq.shape[0]
 
             # (3.6) <eot> or <eos>
+            is_last_msg = (msg_idx == len(messages) - 1)
             if apply_eot:
                 seq.append(self.special_token("<|eot|>"))
+                loss_masks.append(special_mask)
+                accum_length += 1
+            elif not self.add_generation_prompt and is_last_msg:
+                # Only skip eos/eot for the LAST message when continuing
+                # from prefix. All other messages must keep their eos.
+                pass
             else:
                 seq.append(self.special_token("<|eos|>"))
-            loss_masks.append(special_mask)
-            accum_length += 1
+                loss_masks.append(special_mask)
+                accum_length += 1
 
         if random.random() < self.audio_cfg and self.is_train:
             seq, loss_masks, conti_feats = self._apply_cfg(
@@ -446,7 +501,11 @@ class SpeechLMPreprocessor:
                 )
             messages = list()
             for msg in data_dict["dialogue"]:
-                if msg[0] == "assistant" and not self.is_train:
+                if (
+                    msg[0] == "assistant"
+                    and not self.is_train
+                    and self.add_generation_prompt
+                ):
                     break
 
                 if msg[1] == "text":
@@ -469,7 +528,11 @@ class SpeechLMPreprocessor:
             messages = list()
             for role, entry in task_config:
                 # When inference, only process the input information (user and system)
-                if role == "assistant" and not self.is_train:
+                if (
+                    role == "assistant"
+                    and not self.is_train
+                    and self.add_generation_prompt
+                ):
                     break
 
                 # Select IO type based on entry name and role

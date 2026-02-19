@@ -441,34 +441,109 @@ def build_parallel_hf_class(model_hf_tag):
 
             # (1) Prefill input_ids
             input_ids = kwargs.get("seqs")
-            input_embeds = self._embed(input_ids, kwargs)
-            
-            # input_embeds = self._embed(input_ids, kwargs)
-            _, cache = self._step(
+            input_embeds = self._embed(input_ids, kwargs) # B, T, V
+            logits, cache = self._step(
                 input_embeds=input_embeds,
                 past_key_values=cache,
-            )
+            ) # logits, B, T, S, V'; cache <- .layers(.keys, .values B,S,T,D)
 
             messages = []
             num_msg = 0
             enforce_modalities = inference_config.get("enforce_modality", [])
+            add_generation_prompt = inference_config.get("add_generation_prompt", True)
+
+            if not add_generation_prompt:
+                # Audio continuation mode: the assistant's audio prefix is
+                # already in the prefill. Continue predicting until EOT.
+                modality = "audio"
+                io_name = "discrete_audio"
+                mask = getattr(self, f"{modality}_mask")
+
+                # Extract prefix audio tokens from input_ids.
+                # The sequence is: <BOS> ... <assistant> <audio> [prefix_tokens]
+                # Find the last <|assistant|> position; prefix starts 2 after.
+                assistant_token_id = self.vocab.index("<|assistant|>")
+                first_stream = input_ids[0, :, 0]
+                assistant_positions = (
+                    first_stream == assistant_token_id
+                ).nonzero(as_tuple=True)[0]
+                prefix_start = assistant_positions[-1].item() + 2
+                prefix_tokens = input_ids[:, prefix_start:, :]
+
+                # === DEBUG: diagnose continuation inference ===
+                # print(f"[DEBUG] input_ids shape: {input_ids.shape}")
+                # print(f"[DEBUG] prefix_start: {prefix_start}, prefix_tokens shape: {prefix_tokens.shape}")
+                # print(f"[DEBUG] prefix_tokens[0, :3, :]: {prefix_tokens[0, :3, :]}")
+                # print(f"[DEBUG] prefix_tokens[0, -3:, :]: {prefix_tokens[0, -3:, :]}")
+                # nonzero_count = (prefix_tokens[0, :, 0] != 0).sum().item()
+                # print(f"[DEBUG] non-zero stream0 count in prefix: {nonzero_count} / {prefix_tokens.shape[1]}")
+
+                # Check raw logits (unmasked) - what does the model predict?
+                raw_last = logits[:, -1, 0, :]  # [B, V] - stream 0 only
+                topk_vals, topk_ids = raw_last.topk(10)
+                top_tokens = [(self.vocab[tid.item()], f"{val.item():.2f}") for tid, val in zip(topk_ids[0], topk_vals[0])]
+                # print(f"[DEBUG] Raw top-10 predictions (stream 0): {top_tokens}")
+                # print(f"[DEBUG] EOT logit: {raw_last[0, self.eot_token_id].item():.2f}, EOS logit: {raw_last[0, self.eos_token_id].item():.2f}")
+                # === END DEBUG ===
+
+                # Only use the last position's logits, with audio mask applied
+                last_logits = logits[:, -1:, :, :].clone()
+                last_logits.masked_fill_(mask, float("-inf"))
+
+                decoded_sequences, cache, _ = self.inference_segment(
+                    config=inference_config[modality],
+                    cache=cache,
+                    prev_token=input_ids[:, -1:, :],
+                    mask=mask,
+                    precomputed_logits=last_logits,
+                )
+
+                # # === DEBUG: show decoded length ===
+                # for di, dseq in enumerate(decoded_sequences):
+                #     print(f"[DEBUG] decoded_seq[{di}] len={dseq.shape[0]}, "
+                #           f"first_s0={self.vocab[dseq[0, 0].item()] if dseq.shape[0] > 0 else 'EMPTY'}, "
+                #           f"last_s0={self.vocab[dseq[-1, 0].item()] if dseq.shape[0] > 0 else 'EMPTY'}")
+                # # === END DEBUG ===
+
+                # Decode prefix-only audio for verification
+                io = self.multimodal_io_dict[io_name]
+                prefix_local = prefix_tokens.clone() - self.vocab_intervals[io_name][0][0]
+                prefix_lengths = torch.Tensor([prefix_local.size(1)]).long().to(prefix_local.device)
+                prefix_content = io.decode_batch(prefix_local, prefix_lengths)
+                messages.append(["prefix", modality, prefix_content])
+
+                for seq in decoded_sequences:
+                    if seq[-1, 0] == self.eot_token_id or seq[-1, 0] == self.eos_token_id:
+                        seq = seq[:-1]
+
+                    # Combine prefix tokens with generated continuation
+                    combined = torch.cat([prefix_tokens[0], seq], dim=0)
+                    combined = combined.unsqueeze(0) - self.vocab_intervals[io_name][0][0]
+                    lengths = torch.Tensor([combined.size(1)]).long().to(combined.device)
+                    content = io.decode_batch(combined, lengths)
+
+                    msg = ["assistant", modality, content]
+                    messages.append(msg)
+
+                return messages, cache
+
             while True:
                 # (2.1) Prefill assistant token
                 logits, cache = self._step(
                     input_ids=self.assistant_token,
                     past_key_values=cache,
                     mask=self.modality_mask,
-                )
+                ) # cache shape += 1
 
                 # (2.2) determine modality token and mask
                 try:
                     modality = enforce_modalities[num_msg]
-                    modality_token = getattr(self, f"{modality}_token")
+                    modality_token = getattr(self, f"{modality}_token") # B, 1, S
                 except:
                     modality_token = logits.argmax(3)
                     modality = modality_token.flatten()[0].item()
-                    modality = self.vocab[modality].replace("<|", "").replace("|>", "")
-                modality_mask = getattr(self, f"{modality}_mask")
+                    modality = self.vocab[modality].replace("<|", "").replace("|>", "") # compute only for the first time
+                modality_mask = getattr(self, f"{modality}_mask") # in buffer
 
                 # (2.3) predict token sequence
                 decoded_sequences, cache, logits = self.inference_segment(
@@ -479,7 +554,7 @@ def build_parallel_hf_class(model_hf_tag):
                 )
 
                 # (2.4) detokenization
-                for seq in decoded_sequences:
+                for seq in decoded_sequences: # seq: [T, S]
                     if (
                         seq[-1, 0] == self.eos_token_id
                         or seq[-1, 0] == self.eot_token_id
@@ -487,11 +562,11 @@ def build_parallel_hf_class(model_hf_tag):
                         seq = seq[:-1]  # remove <|eos|> or <|eou|>
 
                     io_name = "discrete_audio" if modality == "audio" else modality
-                    seq = seq.unsqueeze(0) - self.vocab_intervals[io_name][0][0]
+                    seq = seq.unsqueeze(0) - self.vocab_intervals[io_name][0][0] # 1, T-1, S
 
                     io = self.multimodal_io_dict[io_name]
                     lengths = torch.Tensor([seq.size(1)]).long().to(seq.device)
-                    content = io.decode_batch(seq, lengths)
+                    content = io.decode_batch(seq, lengths) # T, S -> audio
 
                     msg = ["assistant", modality, content]
                     messages.append(msg)
@@ -513,6 +588,7 @@ def build_parallel_hf_class(model_hf_tag):
             cache: list,
             prev_token: torch.Tensor,
             mask: torch.Tensor,
+            precomputed_logits: torch.Tensor = None,
         ):
             device = prev_token.device
 
@@ -522,10 +598,18 @@ def build_parallel_hf_class(model_hf_tag):
                 indices = torch.zeros(num_hypo).long().to(device)
                 cache.batch_select_indices(indices)
                 prev_token = prev_token.tile(num_hypo, 1, 1)
+                if precomputed_logits is not None:
+                    precomputed_logits = precomputed_logits.tile(num_hypo, 1, 1, 1)
 
             cfg = config.get("cfg", 1)
             if cfg > 1:
-                cache = self._prepare_cfg_cache(cache)
+                cache, cfg_logits = self._prepare_cfg_cache(cache)
+                if precomputed_logits is not None:
+                    # Use only the last position of cfg_logits to match
+                    # precomputed_logits shape [B, 1, S, V]
+                    precomputed_logits = torch.cat(
+                        [precomputed_logits, cfg_logits[:, -1:, :, :]], dim=0
+                    )
 
             # (2) Inference loop
             hypos = list()
@@ -535,14 +619,24 @@ def build_parallel_hf_class(model_hf_tag):
                 if cfg > 1:
                     prev_token = prev_token.tile(2, 1, 1)
 
-                logits, cache = self._step(
-                    input_ids=prev_token, past_key_values=cache, mask=mask
-                )
+                if precomputed_logits is not None:
+                    logits = precomputed_logits
+                    precomputed_logits = None
+                else:
+                    logits, cache = self._step(
+                        input_ids=prev_token, past_key_values=cache, mask=mask
+                    ) # cache length increase by 1 step
 
                 if cfg > 1:
                     logits, cfg_logits = logits.chunk(2)
                     logits = logits * cfg + cfg_logits * (1 - cfg)
                     logits.masked_fill_(mask, float("-inf"))
+
+                # Suppress EOS/EOT before min_step to force continuation
+                min_step = config.get("min_step", 0)
+                if step < min_step:
+                    logits[:, :, 0, self.eot_token_id] = float("-inf")
+                    logits[:, :, 0, self.eos_token_id] = float("-inf")
 
                 # (2.2) token prediction based on logits
                 prev_token = self._logits_to_token(
@@ -564,6 +658,8 @@ def build_parallel_hf_class(model_hf_tag):
 
                 if torch.all(finish_idx >= 0):
                     break
+            else:
+                print("Finish Reasonable Warning: Reached max_step in inference_segment without generating EOS/EOT.")
 
             # (3) Finalize
             finish_idx = torch.where(finish_idx == -1, step, finish_idx)
@@ -678,7 +774,7 @@ def build_parallel_hf_class(model_hf_tag):
             zeros = torch.zeros((batch_size, length, self.num_stream))
             zeros = zeros.to(device).long()
 
-            _, cfg_cache = self._step(input_ids=zeros)
+            cfg_logits, cfg_cache = self._step(input_ids=zeros)
 
             combined_cache = DynamicCache()
             for idx in range(len(cache.layers)):
@@ -702,6 +798,6 @@ def build_parallel_hf_class(model_hf_tag):
                     layer_idx=idx,
                 )
 
-            return combined_cache
+            return combined_cache, cfg_logits
 
     return ParallelLLM
