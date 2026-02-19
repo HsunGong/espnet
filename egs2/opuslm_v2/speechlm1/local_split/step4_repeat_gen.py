@@ -13,16 +13,17 @@ import soundfile as sf
 from local_split.local_config import apply_step_config
 from local_split.jsonl_parallel_runner import JsonlParallelRunner
 
+SILENCE = 0.
 
-def build_repeat1_path(split1_audio_path: str) -> str:
+def build_repeat1_path(split1_audio_path: str, silence: float = 0.) -> str:
     """Convert `/path/to/foo.wav` -> `/path/to/foo.repeat1.wav`."""
     p = Path(split1_audio_path)
     if p.suffix:
-        return str(p.with_suffix(f".repeat1{p.suffix}"))
-    return str(p.with_name(f"{p.name}.repeat1.flac"))
+        return str(p.with_suffix(f".repeat1.sil{silence:.1f}{p.suffix}"))
+    return str(p.with_name(f"{p.name}.repeat1.sil{silence:.1f}.flac"))
 
 
-def repeat_split1_audio(split1_audio_path: str) -> tuple[str, float]:
+def repeat_split1_audio(split1_audio_path: str, silence: float = 0.) -> tuple[str, float]:
     """Repeat split1 audio 2 times and save to `<stem>.repeat1.wav`.
 
     Returns:
@@ -30,10 +31,13 @@ def repeat_split1_audio(split1_audio_path: str) -> tuple[str, float]:
     """
     audio, sr = sf.read(split1_audio_path)
 
-    # axis=0 repeats on time dimension for both mono and multi-channel audio
-    repeated = np.concatenate([audio, audio], axis=0)
+    # with some silence?
+    silence_audio = np.zeros(int(sr * silence))
 
-    out_path = build_repeat1_path(split1_audio_path)
+    # axis=0 repeats on time dimension for both mono and multi-channel audio
+    repeated = np.concatenate([audio, silence_audio, audio], axis=0)
+
+    out_path = build_repeat1_path(split1_audio_path, silence=silence)
     out_dir = os.path.dirname(out_path)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
@@ -56,12 +60,12 @@ def process_one(idx: int, line: str) -> dict | None:
             logging.warning(f"Skip line {idx}: split1 audio not found: {split1_audio_path}")
             return None
 
-        repeated_audio_path, repeated_duration = repeat_split1_audio(split1_audio_path)
+        repeated_audio_path, repeated_duration = repeat_split1_audio(split1_audio_path, silence=SILENCE)
 
         metadata_out = record
 
         metadata_out["main"]["audio_path"] = repeated_audio_path
-        metadata_out["main"]["audio_duration"] = repeated_duration
+        metadata_out["main"]["duration"] = repeated_duration
         # metadata_out["main"]["audio_caption"] = "" #<- TODO
 
         # Keep split2 fully aligned with split1 content.
@@ -112,13 +116,16 @@ def main():
     if args.config_path:
         args, _ = apply_step_config(args, "step4_repeat_gen")
 
+    global SILENCE
+    SILENCE = args.silence if hasattr(args, "silence") else 0.
+
     runner = JsonlParallelRunner(
         input_jsonl=str(args.input_jsonl),
         output_jsonl=str(args.output_jsonl),
         process_fn=process_one,
         n_jobs=args.nj,
         backend=args.parallel_backend,
-        desc="Step4.1 Repeat split1",
+        desc=f"Step4.1 Repeat split1 with middle silence={SILENCE}",
         resume=args.resume,
         resume_key_fn=lambda rec: rec["split1"]["audio_path"],
     )

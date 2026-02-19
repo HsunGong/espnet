@@ -83,6 +83,7 @@ step4_repeat_gen:
   nj: 1
   parallel_backend: "loky"
   resume: false
+  silence: 0.5
 
 step4_repeat_rewrite_main:
   vllm_url: "http://cnode1-002:8000/v1"

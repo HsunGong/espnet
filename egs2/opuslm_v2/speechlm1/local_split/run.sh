@@ -26,9 +26,6 @@ config_basename=$(basename "${config_f}" .yaml)
 step1_metadata_jsonl="${work_dir}/metadata.step1_vad.jsonl"
 step2_metadata_jsonl="${work_dir}/metadata.step2_caption.jsonl"
 step3_metadata_jsonl="${work_dir}/metadata.step3_refine.jsonl"
-step4_audio_metadata_jsonl="${work_dir}/metadata.step4_repeat_main.audio_only.jsonl"
-step4_metadata_jsonl="${work_dir}/metadata.step4_repeat_rewrite_main.${config_basename}.jsonl"
-step5_metadata_jsonl="${work_dir}/metadata.step5_edit_merge.${config_basename}.jsonl"
 
 export PYTHONPATH=".:${PYTHONPATH}"
 
@@ -108,6 +105,9 @@ fi
 # Step 4: merge old Step4+Step5
 #   1) main-audio <- repeat split1, split2 <- split1
 #   2) rewrite main-caption on top of Step4 metadata
+step4_audio_metadata_jsonl="${work_dir}/metadata.step4_repeat_gen.${config_basename}.jsonl"
+step4_metadata_jsonl="${work_dir}/metadata.step4_repeat_rewrite_main.${config_basename}.jsonl"
+step4_caption_metadata_jsonl="${work_dir}/metadata.step4_repeat_caption.${config_basename}.jsonl"
 if [ ${stage} -le 4 ] && [ 4 -le ${stop_stage} ]; then
     if [ "${skip_generate}" = true ]; then
         echo "Skipping Step 4 metadata generation, using existing: ${step4_metadata_jsonl}"
@@ -126,6 +126,13 @@ if [ ${stage} -le 4 ] && [ 4 -le ${stop_stage} ]; then
             --nj "${nj}" \
             --config_path "${config_f}"
 
+        echo "Starting Step 4.3: Captioner generates main caption from repeated audio"
+        python3 local_split/step4_repeat_caption.py \
+            --input_jsonl "${step4_audio_metadata_jsonl}" \
+            --output_jsonl "${step4_caption_metadata_jsonl}" \
+            --nj "${nj}" \
+            --config_path "${config_f}"
+
         echo "Step 4 finished. Metadata: ${step4_metadata_jsonl}"
     fi
 
@@ -139,9 +146,18 @@ if [ ${stage} -le 4 ] && [ 4 -le ${stop_stage} ]; then
         echo "Dataset at: ${step4_dataset_jsonl}"
     done
 
+    caption_mode=main
+    step4_caption_dataset_jsonl="${work_dir}/dialogue.step4_caption_${caption_mode}.${config_basename}.jsonl"
+    python3 local_split/assemble_dialogue.py \
+        --input_jsonl "${step4_caption_metadata_jsonl}" \
+        --output_jsonl "${step4_caption_dataset_jsonl}" \
+        --caption_mode "${caption_mode}" \
+        -k "${k}"
+    echo "Dataset at: ${step4_caption_dataset_jsonl}"
 fi
 
 # Step 5: edit split2 + generate edited main-caption (metadata only)
+step5_metadata_jsonl="${work_dir}/metadata.step5_edit_merge.${config_basename}.jsonl"
 if [ ${stage} -le 5 ] && [ 5 -le ${stop_stage} ]; then
     if [ "${skip_generate}" = true ]; then
         echo "Skipping Step 5 metadata generation, using existing: ${step5_metadata_jsonl}"

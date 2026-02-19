@@ -5,9 +5,7 @@ from pathlib import Path
 import soundfile as sf
 
 DATA_DIR = Path("/mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/part2_4/dur_20_30.debug")
-# EXP_BASE = Path("/mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/exp/opuslm_v2_stage2_pretrain_base/inference/inference_audio_continue_step_350000")
-# EXP_BASE = Path("/mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/exp/opuslm_v2_stage2_pretrain_base/inference/inference_speech_step_350000")
-EXP_BASE = Path("/mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/exp/opuslm_v2_stage2_pretrain_base/inference/inference_speech_continue_step_350000")
+
 
 def parse_args():
     p = argparse.ArgumentParser(
@@ -59,9 +57,9 @@ def scan_jsonl(name_keys, path_keys, mode):
                         print("\tcaption-main", repr(obj[seg]["audio_caption"]))
                 
 
-def scan_exp(name_keys, path_keys, mode):
+def scan_exp(name_keys, path_keys, mode, expdir):
     # exp scan: name_key on wav.parent path string; path_key on wav basename (filename)
-    for subdir in EXP_BASE.iterdir():
+    for subdir in expdir.iterdir():
         if not subdir.is_dir():
             continue
         if not match_keys(str(subdir), name_keys, mode):
@@ -78,7 +76,9 @@ def main():
     args = parse_args()
 
     # Independent scans (no dependency)
-    scan_exp(args.name_key, args.path_key, args.mode)
+    for expdir in [Path("/mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/exp/opuslm_v2_stage2_pretrain_base/inference/inference_speech_step_350000"), Path("/mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/exp/opuslm_v2_stage2_pretrain_base/inference/inference_speech_continue_step_350000")]:
+        # EXP_BASE = Path("/mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/exp/opuslm_v2_stage2_pretrain_base/inference/inference_audio_continue_step_350000")
+        scan_exp(args.name_key, args.path_key, args.mode, expdir)
     scan_jsonl(args.name_key, args.path_key, args.mode)
 
 if __name__ == "__main__":

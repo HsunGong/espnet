@@ -5,6 +5,14 @@ num_hypo: 1
 enforce_modality: ["audio"]
 add_generation_prompt: false
 
+# Fraction of the full audio to use as the continuation prefix (0 < ratio < 1).
+# The preprocessor feeds the first `ratio * L` frames of the assistant audio,
+# ensuring the model's last-seen position is genuinely mid-audio so it predicts
+# real continuation tokens and not <eos>.
+# (The n_tail-only strip left the model at its natural end-of-audio boundary,
+# causing immediate EOS prediction and empty continuation output.)
+continuation_prefix_ratio: 0.8 #<- 0.5?
+
 audio:
   temperature: 0.8
   topk: 20
