@@ -1,5 +1,5 @@
 from .audio_loader import LhotseAudioReader, ArkiveAudioReader, KaldiAudioReader
-from .text_loader import TextReader, ArkiveTextReader
+from .text_loader import TextReader, NumericReader, ArkiveTextReader
 from .dialogue_loader import DialogueReader, ArkiveDialogueLoader
 
 ALL_DATA_LOADERS = {
@@ -10,6 +10,7 @@ ALL_DATA_LOADERS = {
     "dialogue": DialogueReader,
     "arkive_dialogue": ArkiveDialogueLoader,
     "kaldi_audio": KaldiAudioReader,
+    "numeric": NumericReader,
 }
 
 __all__ = [

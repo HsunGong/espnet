@@ -69,7 +69,7 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--num-workers",
         type=int,
-        default=4,
+        default=1,
         help="Number of worker processes for inference",
     )
     parser.add_argument(
@@ -87,6 +87,12 @@ def get_parser() -> argparse.ArgumentParser:
         type=int,
         default=42,
         help="Random seed for reproducible inference",
+    )
+    parser.add_argument(
+        "--add-generation-prompt",
+        type=lambda x: str(x).lower() in ["true", "1", "yes"],
+        default=None,
+        help="Whether to add generation prompt",
     )
 
     return parser
@@ -162,6 +168,7 @@ def inference_worker(
     registered_specifier: str,
     output_dir: Path,
     seed: int,
+    add_generation_prompt: bool,
 ):
     """Worker process for inference with data sharding."""
     # Set up logger for this worker
@@ -184,6 +191,15 @@ def inference_worker(
 
     with open(inference_config_path, "r") as f:
         inference_config = yaml.safe_load(f)
+
+    if add_generation_prompt is not None:
+        effective_add_gen_prompt = add_generation_prompt
+    elif "add_generation_prompt" in inference_config:
+        effective_add_gen_prompt = inference_config["add_generation_prompt"]
+    else:
+        effective_add_gen_prompt = True  # Default to True if not specified
+    inference_config["add_generation_prompt"] = effective_add_gen_prompt
+    train_config["add_generation_prompt"] = effective_add_gen_prompt
 
     job_template_class = _all_job_types[train_config["job_type"]]
     job_template = job_template_class(train_config, is_train=False)
@@ -221,46 +237,50 @@ def inference_worker(
         )
 
         dataset_output_dir = (
-            output_dir / dataset_specifier.replace(":", "_") / f"inference_rank{rank}"
+            output_dir / dataset_specifier.replace(":", "_")
         )
         dataset_output_dir.mkdir(exist_ok=True, parents=True)
-        output_file = dataset_output_dir / "results.json"
+        output_file = dataset_output_dir / f"results_{rank}.jsonl"
 
         test_iterator = iterator_factory.build_iter()
-        results = dict()
 
         for sample_idx, sample in enumerate(test_iterator):
-            # print(sample)
-            sample = to_device(sample, "cuda", dtype=dtype)
             task, data_name, example_id = sample.pop("keys")[0]
-
             logger.info(
                 f"Processing sample {sample_idx}: {task}/{data_name}/{example_id}"
             )
+
+            sample = to_device(sample, "cuda", dtype=dtype)
+            result_entry = dict(example_id=example_id)
+
             messages, _ = model.inference(inference_config, **sample)
 
+            write_messages = []
             for seg_idx, (role, modality, content) in enumerate(messages):
                 if modality == "audio":
                     audio, length, sample_rate = content
                     audio, length = audio[0], length[0]
                     audio = audio.cpu().float().numpy()
 
-                    content = dataset_output_dir / f"{example_id}_segment{seg_idx+1}.wav"
-                    sf.write(content, audio.T, sample_rate)
+                    if role == "prefix":
+                        continue
+                        # skip prefix waveform in output, only use this for debug
+                        content = dataset_output_dir / f"{example_id}_prefix.wav"
+                    else:
+                        content = dataset_output_dir / f"{example_id}_segment{seg_idx+1}.wav"
 
-                    messages[seg_idx][2] = str(content)
+                    sf.write(content, audio.T, sample_rate)
+                    write_messages.append((role, modality, str(content)))
+                else:
+                    write_messages.append((role, modality, content))
 
                 logger.info(
                     f"Segment {seg_idx}, role={role}, modality={modality}, content={content}"
                 )
+            result_entry["messages"] = write_messages
 
-            results[example_id] = messages
-            with open(output_file, "wb") as writer:
-                writer.write(
-                    json.dumps(
-                        results, indent=4, ensure_ascii=False, sort_keys=False
-                    ).encode("utf_8")
-                )
+            with open(output_file, "a", encoding="utf-8") as writer:
+                writer.write(json.dumps(result_entry, ensure_ascii=False) + "\n")
 
 
 def main():
@@ -305,6 +325,7 @@ def main():
                 args.test_registered_specifier or "",
                 output_dir,
                 args.seed,
+                args.add_generation_prompt,
             ),
         )
         p.start()

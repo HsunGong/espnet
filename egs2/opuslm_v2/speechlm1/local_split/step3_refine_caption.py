@@ -3,8 +3,6 @@ import argparse
 import json
 import os
 import sys
-from joblib import Parallel, delayed
-from tqdm import tqdm
 import logging
 import requests
 from jinja2 import Template
@@ -13,48 +11,65 @@ from jinja2 import Template
 # Or we can reuse VLLMClient if it supports text-only chat completion.
 # Let's check sft_vllm_client content first or assume it's standard OpenAI-compatible client wrapper.
 from local_split.sft_vllm_client import VLLMClient
+from local_split.local_config import apply_step_config
+from local_split.jsonl_parallel_runner import JsonlParallelRunner
 
 system_prompt = """You are an expert audio caption consistency editor.
 
-There are THREE captions. The main caption describes the full original audio. split1 and split2 describe two consecutive temporal segments of that audio.
+You are given THREE captions describing the same original audio:
+- A full-audio caption (authoritative reference for global context)
+- Caption A (split1): first consecutive temporal segment
+- Caption B (split2): second consecutive temporal segment
 
-Your task is to refine two split audio captions (split1 and split2) using the main audio caption as ground truth for terminology, style, and overall context.
+Your task is to refine Caption A and Caption B using the full-audio caption as the ground truth for terminology, speaker identity, environment, and overall framing.
 
 Core Objective:
-Ensure each split caption is fully consistent with the main caption while accurately describing only the events within that split segment.
+Each refined segment caption must be fully consistent with the full-audio caption while describing ONLY the audio events that occur within that segment.
 
 Editing Principles:
 
-1. Treat the main caption as authoritative for global context (environment, speaker identity, tone, setting, narrative framing).
+1) Resolve inconsistencies using ONLY these operations when necessary:
+   - Modify: minimal wording adjustments to remove contradictions
+   - Delete: remove only the conflicting portion
+   - Add: insert missing details ONLY if the detail is explicitly stated in the full-audio caption, AND it clearly belongs inside that segment’s time span
 
-2. Resolve inconsistencies by applying one of the following operations when necessary:
-   - Modify: Adjust wording to remove contradictions.
-   - Delete: Remove only the conflicting portion.
-   - Add: Insert missing details ONLY if:
-       • the event clearly belongs to that split’s time span, and
-       • it is explicitly stated in the main caption.
+2) Strict limits:
+   - Do NOT introduce any new events not mentioned in the full-audio caption.
+   - Do NOT add new technical, numerical, institutional, or interpretive details.
+   - Do NOT expand content beyond what is needed for consistency.
+   - Do NOT describe events outside the segment’s temporal scope.
+   - Do NOT rewrite for style or fluency. Preserve the original writing style and phrasing whenever possible.
+   - Prefer the smallest possible edit that fixes the inconsistency.
 
-3. Do NOT:
-   - Introduce new events not mentioned in the main caption.
-   - Add new technical, numerical, institutional, or interpretive details.
-   - Expand beyond what is needed to ensure consistency.
-   - Describe events outside the split’s temporal scope.
-
-4. Prefer minimal edits. Preserve valid local details from the split caption if they do not contradict the main caption.
+4) Naming constraint:
+   - The refined captions MUST NOT mention the words: "main", "split1", "split2", "Caption A", "Caption B", "segment", or any label that reveals segmentation.
+   - Each refined caption must read as a standalone audio caption for its own clip.
 
 Change Reporting Rules:
 - Be concise.
-- List only what was changed (no full rewrites in the explanation).
+- List only what was changed (do not restate the full caption).
 - If no changes are required, output exactly: "No changes needed."
 
-Output valid JSON only.
+Output valid JSON only. No extra text.
+{
+    "split1": {
+        "refined_caption": "...",
+        "changes": "..."
+    },
+    "split2": {
+        "refined_caption": "...",
+        "changes": "..."
+    }
+}
 """
 
 user_prompt_template = Template("""
 ## Main Caption:
 {{ main_caption }}
+
 ## Split1 Caption:
 {{ split1_caption }}
+
 ## Split2 Caption: 
 {{ split2_caption }}
 
@@ -129,6 +144,8 @@ def process_one(line: str, llm_client):
         return None
 
 def main():
+    global system_prompt, user_prompt_template
+
     parser = argparse.ArgumentParser(description="Refine captions for split audios using Main caption.")
     parser.add_argument("-i", "--input_jsonl", required=True, help="Path to input metadata.step2_caption.jsonl")
     parser.add_argument("-o", "--output_jsonl", required=True, help="Path to output metadata.step3_refine.jsonl")
@@ -136,24 +153,39 @@ def main():
     # Updated default model as requested
     parser.add_argument("--model", type=str, default="Qwen/Qwen3-235B-A22B-Instruct-2507-FP8", help="Model name for vLLM")
     parser.add_argument("--nj", type=int, default=32, help="Number of parallel workers")
+    parser.add_argument(
+        "--parallel_backend",
+        type=str,
+        default="threading",
+        choices=["threading", "loky"],
+        help="joblib backend",
+    )
+    parser.add_argument("--config_path", type=str, default=None)
 
     args = parser.parse_args()
+
+    if args.config_path:
+        args, config = apply_step_config(args, "step3_refine_caption")
+        step_cfg = config["step3_refine_caption"]
+        system_prompt = step_cfg["system_prompt"]
+        user_prompt_template = Template(step_cfg["user_prompt"])
 
     # VLLMClient usually handles the API details
     llm_client = VLLMClient(base_url=args.vllm_url, model=args.model, max_concurrent=args.nj*2, timeout=1200)
 
-    with open(args.input_jsonl, 'r', encoding='utf-8') as fin:
-        lines = fin.readlines()
+    def _process(idx: int, line: str) -> dict | None:
+        return process_one(line, llm_client)
 
-    success_pbar = tqdm(total=len(lines), desc="Refining Captions")
-    
-    with open(args.output_jsonl, 'w', encoding='utf-8') as fout:
-        for ret in Parallel(n_jobs=args.nj, backend="threading", return_as="generator")(
-            delayed(process_one)(line, llm_client) for line in lines
-        ):
-            if ret:
-                fout.write(json.dumps(ret, ensure_ascii=False) + '\n')
-            success_pbar.update(1)
+    runner = JsonlParallelRunner(
+        input_jsonl=args.input_jsonl,
+        output_jsonl=args.output_jsonl,
+        process_fn=_process,
+        n_jobs=args.nj,
+        backend=args.parallel_backend,
+        desc="Refining Captions",
+        resume=False,
+    )
+    runner.run()
 
 if __name__ == "__main__":
     main()

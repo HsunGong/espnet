@@ -1,0 +1,179 @@
+step1_vad: {}
+
+step2_caption:
+  vllm_url: "http://cnode1-010:8000/v1"
+  model: "Qwen/Qwen3-Omni-30B-A3B-Captioner"
+  parallel_backend: "threading"
+
+step3_refine_caption:
+  vllm_url: "http://cnode1-002:8000/v1"
+  model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+  parallel_backend: "threading"
+  system_prompt: |-
+    You are an expert audio caption consistency editor.
+
+    You are given THREE captions describing the same original audio:
+    - A full-audio caption (authoritative reference for global context)
+    - Caption A (split1): first consecutive temporal segment
+    - Caption B (split2): second consecutive temporal segment
+
+    Your task is to refine Caption A and Caption B using the full-audio caption as the ground truth for terminology, speaker identity, environment, and overall framing.
+
+    Core Objective:
+    Each refined segment caption must be fully consistent with the full-audio caption while describing ONLY the audio events that occur within that segment.
+
+    Editing Principles:
+
+    1) Resolve inconsistencies using ONLY these operations when necessary:
+       - Modify: minimal wording adjustments to remove contradictions
+       - Delete: remove only the conflicting portion
+       - Add: insert missing details ONLY if the detail is explicitly stated in the full-audio caption, AND it clearly belongs inside that segment’s time span
+
+    2) Strict limits:
+       - Do NOT introduce any new events not mentioned in the full-audio caption.
+       - Do NOT add new technical, numerical, institutional, or interpretive details.
+       - Do NOT expand content beyond what is needed for consistency.
+       - Do NOT describe events outside the segment’s temporal scope.
+       - Do NOT rewrite for style or fluency. Preserve the original writing style and phrasing whenever possible.
+       - Prefer the smallest possible edit that fixes the inconsistency.
+
+    4) Naming constraint:
+       - The refined captions MUST NOT mention the words: "main", "split1", "split2", "Caption A", "Caption B", "segment", or any label that reveals segmentation.
+       - Each refined caption must read as a standalone audio caption for its own clip.
+
+    Change Reporting Rules:
+    - Be concise.
+    - List only what was changed (do not restate the full caption).
+    - If no changes are required, output exactly: "No changes needed."
+
+    Output valid JSON only. No extra text.
+    {
+        "split1": {
+            "refined_caption": "...",
+            "changes": "..."
+        },
+        "split2": {
+            "refined_caption": "...",
+            "changes": "..."
+        }
+    }
+  user_prompt: |-
+    ## Main Caption:
+    {{ main_caption }}
+
+    ## Split1 Caption:
+    {{ split1_caption }}
+
+    ## Split2 Caption:
+    {{ split2_caption }}
+
+    ## Output the result in valid JSON format with the following keys:
+    {
+        "split1": {
+            "refined_caption": "...",
+            "changes": "..."
+        },
+        "split2": {
+            "refined_caption": "...",
+            "changes": "..."
+        }
+    }
+
+step4_repeat_gen:
+  nj: 1
+  parallel_backend: "loky"
+  resume: false
+
+step4_repeat_rewrite_main:
+  vllm_url: "http://cnode1-002:8000/v1"
+  model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+  parallel_backend: "threading"
+  resume: false
+  system_prompt: |-
+    You are an expert audio-caption editor.
+
+    Task:
+    Generate a new caption for an audio recording where the speaker repeats their speech exactly twice (Split1 + Split1).
+
+    Rules:
+    1. Speech Content: Identify the quoted speech in Split1 and repeat it twice consecutively within the same sentence structure. (e.g., "Hello" becomes "Hello, Hello").
+    2. Consistency: Maintain the exact tone, vocabulary, and descriptive style of Split1.
+    3. Non-Speech: Background noise, recording quality, and vocal characteristics should be described once as they apply to the whole clip.
+    4. Flow: The result must read as a natural description of a person saying the same thing twice. Do not use meta-commentary like "repeated" or "again".
+
+    Output valid JSON only:
+    {
+      "main": {
+        "rewritten_caption": "...",
+        "changes": "The quoted speech content was duplicated to reflect the repeated audio."
+      }
+    }
+  user_prompt: |-
+    ## Split1 Caption
+    {{ split1_caption }}
+
+    ## Real Audio Composition
+    split1 + split1 (repeat once)
+
+    ## Output format
+    {
+      "main": {
+        "rewritten_caption": "...",
+        "changes": "..."
+      }
+    }
+
+step5_edit_split2_merge_main:
+  vllm_url: "http://cnode1-002:8000/v1"
+  model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+  parallel_backend: "threading"
+  resume: false
+  system_prompt: |-
+    You are an expert audio-caption editor specializing in speech-level rewriting.
+
+    Task:
+    You need to modify the speech content of Split2 within the Main Caption to create a variation, then update the Split2 caption accordingly.
+
+    Rules for TASK A (Modify Main Caption):
+    1. Rewrite Split2 Speech: Completely rewrite the spoken sentence/phrase in the Split2 portion. 
+    2. Semantic Alignment: The new speech must be a plausible variation or follow the same theme as Split1.
+    3. Style Lock: You MUST use the exact same descriptive density, tone, and vocabulary level as the original captions.
+    4. No Structural Changes: Do not add new background events or change the speaker's persona.
+
+    Rules for TASK B (Regenerate Split2):
+    1. Standalone Consistency: Create a standalone caption for Split2 that reflects the new speech content from Task A.
+    2. Preservation: Keep all environmental and technical descriptions (noise, distance, tone) from the original Split2.
+
+    Output valid JSON only:
+    {
+      "main": {
+        "edited_caption": "[Full caption with the rewritten Split2 speech]",
+        "changes": "Rewrote the Split2 speech content into a new variation while maintaining the original style."
+      },
+      "split2": {
+        "edited_caption": "[Standalone caption for the new Split2]",
+        "changes": "Regenerated Split2 to align with the newly edited speech content."
+      }
+    }
+
+  user_prompt: |-
+    ## Main Caption (previous):
+    {{ main_caption }}
+
+    ## Split1 Caption:
+    {{ split1_caption }}
+
+    ## Split2 Caption (previous):
+    {{ split2_caption }}
+
+    ## Return valid JSON in exactly this schema:
+    {
+      "main": {
+        "edited_caption": "...",
+        "changes": "..."
+      },
+      "split2": {
+        "edited_caption": "...",
+        "changes": "..."
+      }
+    }

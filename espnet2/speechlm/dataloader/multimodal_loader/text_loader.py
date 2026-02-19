@@ -185,3 +185,14 @@ class TextReader:
     def items(self):
         """Return iterator over (id, text) pairs."""
         return self.data.items()
+
+
+class NumericReader(TextReader):
+    """Dict-like numeric reader that converts text to float.
+
+    Inherits from TextReader and overrides __getitem__ to convert text to float.
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for k in list(self.data.keys()):
+            self.data[k] = eval(self.data[k])

@@ -10,10 +10,24 @@ from joblib import Parallel, delayed
 from tqdm import tqdm
 import warnings
 
+from local_split.local_config import apply_step_config
+
 # Suppress librosa warnings if any
 warnings.filterwarnings("ignore")
 
-def process_one(line, output_dir, split_ratio=0.5):
+
+def get_audio_type(path: str) -> str:
+    """Infer audio type from path keywords (speech / music / sound)."""
+    p = path.lower()
+    if any(k in p for k in ["speech", "owsm", "emilia", "commonvoice", "voxforge"]):
+        return "speech"
+    elif any(k in p for k in ["music", "fma", "jamendo", "disco"]):
+        return "music"
+    else:
+        return "sound"
+
+
+def process_one(line, output_dir, split_ratio=0.5, vad_top_db=30):
     try:
         data = json.loads(line)
         
@@ -51,10 +65,9 @@ def process_one(line, output_dir, split_ratio=0.5):
         # But commonly these datasets are mono. Let's assume mono (y is 1D).
         
         # Energy VAD
-        # Use librosa.effects.split
-        # top_db=30 is a reasonable default for speech.
+        # Use librosa.effects.split; top_db is tunable via --vad_top_db
         try:
-            intervals = librosa.effects.split(y, top_db=30)
+            intervals = librosa.effects.split(y, top_db=vad_top_db)
         except Exception:
             # Fallback if VAD fails
             intervals = np.array([])
@@ -142,13 +155,13 @@ def process_one(line, output_dir, split_ratio=0.5):
         # User said "audio 写入到 output-dir 的两个 split".
         # This might mean: `output_dir/split1/file.wav` and `output_dir/split2/file.wav`.
         
-        out_dir1 = os.path.join(output_dir, "split1")
-        out_dir2 = os.path.join(output_dir, "split2")
+        out_dir1 = os.path.abspath(os.path.join(output_dir, "split1"))
+        out_dir2 = os.path.abspath(os.path.join(output_dir, "split2"))
         os.makedirs(out_dir1, exist_ok=True)
         os.makedirs(out_dir2, exist_ok=True)
         
-        out_path1 = os.path.join(out_dir1, f"{name}{ext}")
-        out_path2 = os.path.join(out_dir2, f"{name}{ext}")
+        out_path1 = os.path.abspath(os.path.join(out_dir1, f"{name}{ext}"))
+        out_path2 = os.path.abspath(os.path.join(out_dir2, f"{name}{ext}"))
         
         sf.write(out_path1, y1, sr)
         sf.write(out_path2, y2, sr)
@@ -178,21 +191,77 @@ def main():
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--output_jsonl", required=True)
     parser.add_argument("--nj", type=int, default=32)
+    parser.add_argument("--config_path", type=str, default=None)
+    parser.add_argument(
+        "--vad_top_db", type=float, default=30,
+        help="Energy threshold (dB) for librosa VAD silence detection. "
+             "Lower = more sensitive (detects quieter speech). Default: 30."
+    )
+    parser.add_argument(
+        "--max_split1_ratio", type=float, default=1.0,
+        help="Maximum fraction of total active audio that split1 may contain. "
+             "1.0 = no cap (all active audio can go to split1, fallback halves it); "
+             "0.5 = split1 ≤ 50%% of active audio. Default: 1.0."
+    )
     args = parser.parse_args()
-    
+
+    if args.config_path:
+        args, _ = apply_step_config(args, "step1_vad")
+
     os.makedirs(args.output_dir, exist_ok=True)
-    
+
     with open(args.input_jsonl, 'r', encoding='utf-8') as f:
         lines = f.readlines()
-        
+
     results = Parallel(n_jobs=args.nj)(
-        delayed(process_one)(line, args.output_dir) for line in tqdm(lines, desc="Processing VAD Split")
+        delayed(process_one)(
+            line, args.output_dir,
+            split_ratio=args.max_split1_ratio,
+            vad_top_db=args.vad_top_db,
+        )
+        for line in tqdm(lines, desc="Processing VAD Split")
     )
-    
+
+    # ---------------------------------------------------------------- write
+    valid_results = []
     with open(args.output_jsonl, 'w', encoding='utf-8') as f:
         for res in results:
             if res:
                 f.write(json.dumps(res, ensure_ascii=False) + "\n")
+                valid_results.append(res)
+
+    # ---------------------------------------------------------------- stats
+    from collections import defaultdict
+    # per type: list of split1_dur / main_dur ratios
+    type_ratios: dict = defaultdict(list)
+    for res in valid_results:
+        main_dur = res.get("main", {}).get("duration")
+        split1_dur = res.get("split1", {}).get("duration")
+        audio_path = res.get("main", {}).get("audio_path", "")
+        if main_dur and split1_dur and main_dur > 0:
+            atype = get_audio_type(audio_path)
+            type_ratios[atype].append(split1_dur / main_dur)
+
+    print(f"\n=== Step1 VAD Split Statistics ===")
+    print(f"  vad_top_db={args.vad_top_db}  max_split1_ratio={args.max_split1_ratio}")
+    print(f"  Valid records written: {len(valid_results)} / {len(lines)}")
+    print()
+    hdr = f"  {'Type':<8}  {'N':>6}  {'Mean':>8}  {'Min':>8}  {'Max':>8}"
+    print(hdr)
+    print("  " + "-" * (len(hdr) - 2))
+    for atype in ["speech", "music", "sound"]:
+        ratios = type_ratios.get(atype, [])
+        if not ratios:
+            print(f"  {atype:<8}  {'0':>6}  {'N/A':>8}  {'N/A':>8}  {'N/A':>8}")
+        else:
+            import numpy as _np
+            arr = _np.array(ratios)
+            print(
+                f"  {atype:<8}  {len(arr):>6}  "
+                f"{arr.mean():>8.4f}  {arr.min():>8.4f}  {arr.max():>8.4f}"
+            )
+    print()
+
 
 if __name__ == "__main__":
     main()

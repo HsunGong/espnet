@@ -3,12 +3,12 @@ import argparse
 import json
 import os
 import sys
-from joblib import Parallel, delayed
-from tqdm import tqdm
 import logging
 import soundfile as sf
 
 from local_split.sft_vllm_client import VLLMClient
+from local_split.local_config import apply_step_config
+from local_split.jsonl_parallel_runner import JsonlParallelRunner
 
 def get_resp(llm_client: VLLMClient, target_audio_path):
     resp = None
@@ -67,24 +67,35 @@ def main():
     parser.add_argument("--vllm_url", type=str, default="http://localhost:8000/v1", help="vLLM API URL")
     parser.add_argument("--model", type=str, default="Qwen/Qwen3-Omni-30B-A3B-Captioner", help="Model name for vLLM")
     parser.add_argument("--nj", type=int, default=32, help="Number of parallel workers")
+    parser.add_argument(
+        "--parallel_backend",
+        type=str,
+        default="threading",
+        choices=["threading", "loky"],
+        help="joblib backend",
+    )
+    parser.add_argument("--config_path", type=str, default=None)
 
     args = parser.parse_args()
 
+    if args.config_path:
+        args, _ = apply_step_config(args, "step2_caption")
+
     llm_client = VLLMClient(base_url=args.vllm_url, model=args.model, max_concurrent=args.nj*2, timeout=1200)
 
-    with open(args.input_jsonl, 'r', encoding='utf-8') as fin:
-        lines = fin.readlines()
+    def _process(idx: int, line: str) -> dict | None:
+        return process_one(line, llm_client)
 
-    success_pbar = tqdm(total=len(lines), desc="Processing Captions")
-    
-    with open(args.output_jsonl, 'w', encoding='utf-8') as fout:
-        # Use threading backend for I/O bound tasks (API calls)
-        for ret in Parallel(n_jobs=args.nj, backend="threading", return_as="generator")(
-            delayed(process_one)(line, llm_client) for line in lines
-        ):
-            if ret:
-                fout.write(json.dumps(ret, ensure_ascii=False) + '\n')
-            success_pbar.update(1)
+    runner = JsonlParallelRunner(
+        input_jsonl=args.input_jsonl,
+        output_jsonl=args.output_jsonl,
+        process_fn=_process,
+        n_jobs=args.nj,
+        backend=args.parallel_backend,
+        desc="Processing Captions",
+        resume=False,
+    )
+    runner.run()
 
 if __name__ == "__main__":
     main()

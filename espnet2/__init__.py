@@ -1,3 +1,3 @@
 """Initialize espnet2 package."""
 
-from espnet import __version__  # NOQA
+# from espnet import __version__  # NOQA
