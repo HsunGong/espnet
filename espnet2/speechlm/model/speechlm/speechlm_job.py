@@ -371,6 +371,7 @@ class SpeechLMPreprocessor:
                 # total delay-interleaved length = actual_frames + n_tail
                 total_length = this_seq.shape[0]
                 actual_frames = total_length - n_tail
+            
                 # Prefix: first prefix_ratio fraction of the actual audio frames.
                 # Use at least n_tail+1 frames so the head padding region is
                 # fully covered and we are guaranteed to be mid-audio.
@@ -500,9 +501,10 @@ class SpeechLMPreprocessor:
                     "If dialogue exist, there should be no more other entries"
                 )
             messages = list()
-            for msg in data_dict["dialogue"]:
+            for idx, msg in enumerate(data_dict["dialogue"], 1):
                 if (
-                    msg[0] == "assistant"
+                    idx == len(data_dict["dialogue"])
+                    and msg[0] == "assistant"
                     and not self.is_train
                     and self.add_generation_prompt
                 ):

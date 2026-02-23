@@ -1,0 +1,171 @@
+vllm:
+  url: "http://localhost:8001/v1"
+  model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+  max_tokens: 1024
+  temperature: 0.7
+
+sampling:
+  k: 10
+
+transcription_ins:
+  words_range: [2, 5]
+  system_prompt: |-
+    You are an expert audio transcription and caption editor.
+    Your task is to insert words into the given transcription and update the caption accordingly.
+    Ensure the modified sentence remains fluent and reasonable.
+    Output ONLY valid JSON in the following format:
+    {
+      "new_asr_text": "...",
+      "new_caption": "...",
+      "edit_operation": "Insert '...' after the Nth word"
+    }
+  user_prompt: |-
+    ## Ground Truth Transcription:
+    {{ text }}
+
+    ## Original Caption:
+    {{ audio_caption }}
+
+    ## Instruction:
+    Insert {{ min_w }} to {{ max_w }} words into the transcription. The sentence must remain fluent and reasonable. Update the caption to reflect this change without mentioning the edit operation itself.
+
+transcription_del:
+  words_range: [2, 5]
+  system_prompt: |-
+    You are an expert audio transcription and caption editor.
+    Your task is to delete words from the given transcription and update the caption accordingly.
+    Ensure the modified sentence remains fluent and reasonable.
+    Output ONLY valid JSON in the following format:
+    {
+      "new_asr_text": "...",
+      "new_caption": "...",
+      "edit_operation": "Delete the words from the Nth to the Mth position"
+    }
+  user_prompt: |-
+    ## Ground Truth Transcription:
+    {{ text }}
+
+    ## Original Caption:
+    {{ audio_caption }}
+
+    ## Instruction:
+    Delete {{ min_w }} to {{ max_w }} words from the transcription. The sentence must remain fluent and reasonable. Update the caption to reflect this change without mentioning the edit operation itself.
+
+transcription_sub:
+  words_range: [2, 5]
+  system_prompt: |-
+    You are an expert audio transcription and caption editor.
+    Your task is to substitute words in the given transcription and update the caption accordingly.
+    Ensure the modified sentence remains fluent and reasonable.
+    Output ONLY valid JSON in the following format:
+    {
+      "new_asr_text": "...",
+      "new_caption": "...",
+      "edit_operation": "Replace the Nth word, '...', with '...'"
+    }
+  user_prompt: |-
+    ## Ground Truth Transcription:
+    {{ text }}
+
+    ## Original Caption:
+    {{ audio_caption }}
+
+    ## Instruction:
+    Substitute {{ min_w }} to {{ max_w }} words in the transcription with other words. The sentence must remain fluent and reasonable. Update the caption to reflect this change without mentioning the edit operation itself.
+
+transcription_replace_sentence:
+  system_prompt: |-
+    You are an expert audio transcription and caption editor.
+    Your task is to replace the entire sentence in the given transcription and update the caption accordingly.
+    Ensure the new sentence is fluent and reasonable.
+    Output ONLY valid JSON in the following format:
+    {
+      "new_asr_text": "...",
+      "new_caption": "...",
+      "edit_operation": "Replace the entire sentence"
+    }
+  user_prompt: |-
+    ## Ground Truth Transcription:
+    {{ text }}
+
+    ## Original Caption:
+    {{ audio_caption }}
+
+    ## Instruction:
+    Replace the entire sentence with a new one of similar length. The new sentence should be fluent and reasonable. Update the caption to reflect this change without mentioning the edit operation itself.
+
+transcription_add_paralinguistic:
+  tags: ["[sigh]", "[laugh]", "[exhale]", "[snort]", "[cough]", "[uhm]", "[Surprise-oh]", "[Surprise-wa]", "[Dissatisfaction-hnn]", "[Question-ah]", "[Question-yi]"]
+  system_prompt: |-
+    You are an expert audio transcription and caption editor.
+    Your task is to add a paralinguistic tag naturally into the transcription and update the caption accordingly.
+    Output ONLY valid JSON in the following format:
+    {
+      "new_asr_text": "...",
+      "new_caption": "...",
+      "edit_operation": "Add ... after the Nth word"
+    }
+  user_prompt: |-
+    ## Ground Truth Transcription:
+    {{ text }}
+
+    ## Original Caption:
+    {{ audio_caption }}
+
+    ## Instruction:
+    Add the paralinguistic tag {{ tag }} naturally into the transcription. Update the caption to reflect this change without mentioning the edit operation itself.
+
+style_whisper:
+  styles: ['serious', 'arrogant', 'child', 'older', 'girl', 'pure', 'sister', 'sweet', 'ethereal', 'whisper', 'gentle', 'recite', 'generous', 'act_coy', 'warm', 'shy', 'comfort', 'authority', 'chat', 'radio', 'soulful', 'story', 'vivid', 'program', 'news', 'advertising', 'roar', 'murmur', 'shout', 'deeply', 'loudly', 'remove', 'exaggerated']
+  system_prompt: |-
+    You are an expert audio director.
+    Your task is to provide a natural language instruction to change the style of the given transcription.
+    Output ONLY valid JSON in the following format:
+    {
+      "style_instruction": "...",
+      "modified_text": "..."
+    }
+  user_prompt: |-
+    ## Original Ground Truth Transcription:
+    {{ text }}
+
+    ## Target Style:
+    The speaker should speak in a '{{ style }}' style.
+
+    ## Instruction:
+    Provide a natural language instruction for the voice actor, and optionally adjust the text slightly to fit the style.
+
+style_emotion:
+  emotions: ['happy', 'angry', 'sad', 'humour', 'confusion', 'disgusted', 'empathy', 'embarrass', 'fear', 'surprised', 'excited', 'depressed', 'coldness', 'admiration', 'remove']
+  system_prompt: |-
+    You are an expert audio director.
+    Your task is to provide a natural language instruction to change the emotion of the given transcription.
+    Output ONLY valid JSON in the following format:
+    {
+      "style_instruction": "...",
+      "modified_text": "..."
+    }
+  user_prompt: |-
+    ## Original Ground Truth Transcription:
+    {{ text }}
+
+    ## Target Emotion:
+    The speaker should speak with a '{{ style }}' emotion.
+
+    ## Instruction:
+    Provide a natural language instruction for the voice actor, and optionally adjust the text slightly to fit the emotion.
+
+audio_effect_speed:
+  range: [0.5, 2.0]
+
+audio_effect_volume:
+  range: [0.5, 2.0]
+
+audio_effect_pitch:
+  range: [-10, 10]
+
+audio_effect_reverb:
+  types: ["small", "medium", "large room"]
+
+audio_effect_dereverb:
+  types: ["small", "medium", "large room"]

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Step 4.3: Generate main-audio caption with the Captioner model.
+"""Step 6: Generate main-audio caption with the Captioner model.
 
-Input:  metadata.step4_repeat_main.audio_only.jsonl  (from step4_repeat_gen.py)
+Input:  metadata.step4_repeat_gen.jsonl  (from step4_repeat_gen.py)
           Each record has `main.audio_path` pointing to the repeated audio but
           may lack `main.audio_caption`.
-Output: metadata.step4_repeat_caption.jsonl
+Output: metadata.step6_repeat_caption.jsonl
           Same records with `main.audio_caption` filled by the Captioner.
 
-This is a direct-captioning alternative to step4_repeat_rewrite_main.py, which
+This is a direct-captioning alternative to step5_repeat_rewrite_main.py, which
 uses a text-only LLM rewriter instead.  Here we feed the repeated audio to the
 same Captioner used in step2_caption.py so the caption is grounded in the
 actual audio signal.
@@ -71,14 +71,14 @@ def process_one(idx: int, line: str, llm_client: VLLMClient) -> dict[str, Any] |
         return None
 
     data["main"]["audio_caption"] = caption
-    data["main"]["caption_source"] = "step4_captioner"
+    data["main"]["caption_source"] = "step6_captioner"
     return data
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Step 4.3: Caption the repeated main-audio with the Captioner model "
+            "Step 6: Caption the repeated main-audio with the Captioner model "
             "(ground-truth audio signal, no LLM text rewriting)."
         )
     )
@@ -92,7 +92,7 @@ def main() -> None:
         "-o",
         "--output_jsonl",
         required=True,
-        help="Path to output metadata.step4_repeat_caption.jsonl",
+        help="Path to output metadata.step6_repeat_caption.jsonl",
     )
     parser.add_argument(
         "--vllm_url",
@@ -116,14 +116,15 @@ def main() -> None:
     )
     parser.add_argument(
         "--resume",
-        action="store_true",
+        type=bool,
+        default=True,
         help="Skip samples already written in output_jsonl using split1.audio_path as key",
     )
     parser.add_argument("--config_path", type=str, default=None)
     args = parser.parse_args()
 
     if args.config_path:
-        args, _ = apply_step_config(args, "step4_repeat_caption")
+        args, _ = apply_step_config(args, "step6_repeat_caption")
 
     llm_client = VLLMClient(
         base_url=args.vllm_url,

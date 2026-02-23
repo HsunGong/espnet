@@ -83,9 +83,14 @@ class JsonlParallelRunner:
         if self.resume:
             print(f"Resume skip count: {skipped_done}")
 
-        pbar = tqdm(total=len(lines), desc=self.desc)
+        pbar = tqdm(total=len(lines), desc=self.desc + f"with nj={self.n_jobs}, backend={self.backend}")
         with open(self.output_jsonl, write_mode, encoding="utf-8") as fout:
-            for ret in Parallel(n_jobs=self.n_jobs, backend=self.backend, return_as="generator")(
+            for ret in Parallel(
+                n_jobs=self.n_jobs,
+                backend=self.backend,
+                return_as="generator",
+                pre_dispatch="n_jobs",
+            )(
                 delayed(self.process_fn)(idx, line) for idx, line in enumerate(lines)
             ):
                 if ret is not None:

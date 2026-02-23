@@ -257,7 +257,16 @@ def inference_worker(
             sample = to_device(sample, "cuda", dtype=dtype)
             result_entry = dict(example_id=example_id)
 
-            messages, _ = model.inference(inference_config, **sample)
+            try:
+                messages, _ = model.inference(inference_config, **sample)
+            except Exception as e:
+                logger.exception(e)
+                if isinstance(sample.get("seqs"), torch.Tensor):
+                    logger.error(f"Failed to process sample {task, data_name, example_id}, sample={sample['seqs'].shape}")
+                else:
+                    logger.error(f"Failed to process sample {task, data_name, example_id}")
+                del sample
+                continue
 
             write_messages = []
             for seg_idx, (role, modality, content) in enumerate(messages):
@@ -279,7 +288,7 @@ def inference_worker(
                     write_messages.append((role, modality, content))
 
                 logger.info(
-                    f"Segment {seg_idx}, role={role}, modality={modality}, content={content}"
+                    f"Segment {seg_idx}, role={role}, modality={modality}, content= {content}"
                 )
             result_entry["messages"] = write_messages
 

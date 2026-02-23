@@ -42,6 +42,9 @@ def scan_jsonl(name_keys, path_keys, mode):
                 print(jf)
                 for seg in ("split1", "split2", "split2_old", "main"):
                     ap = (obj.get(seg, {}) or {}).get("audio_path")
+                    if seg not in obj:
+                        continue
+
                     print(f"- {seg}")
                     if isinstance(ap, str) and ap.strip():
                         print(f"\t{ap}")
@@ -55,6 +58,8 @@ def scan_jsonl(name_keys, path_keys, mode):
                         print("\tcaption2-old", repr(obj[seg]["audio_caption"]))
                     elif seg == "main":
                         print("\tcaption-main", repr(obj[seg]["audio_caption"]))
+                    if "caption_changes" in obj[seg]:
+                        print("\tcaption-changes", repr(obj[seg]["caption_changes"]))
                 
 
 def scan_exp(name_keys, path_keys, mode, expdir):

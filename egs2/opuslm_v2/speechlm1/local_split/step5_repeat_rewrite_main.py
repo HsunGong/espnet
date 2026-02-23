@@ -115,7 +115,7 @@ def process_one(idx: int, line: str, llm_client: VLLMClient) -> dict[str, Any] |
 
         data["main"]["audio_caption"] = rewritten_caption
         data["main"]["caption_changes"] = caption_changes
-        data["main"]["caption_source"] = "step4_rewrite_from_repeat_audio"
+        data["main"]["caption_source"] = "step5_rewrite_from_repeat_audio"
     except Exception as e:
         logging.warning(f"Line {idx}: invalid json: {e}")
         return None
@@ -128,7 +128,7 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(
         description=(
-            "Step4 metadata generation: rewrite main caption with LLM based on Step4 metadata."
+            "Step5 metadata generation: rewrite main caption with LLM based on Step4 (repeat-gen) metadata."
         )
     )
     parser.add_argument("-i", "--input_jsonl", required=True, help="Path to input metadata.step4_repeat_main.jsonl")
@@ -150,15 +150,16 @@ def main() -> None:
     )
     parser.add_argument(
         "--resume",
-        action="store_true",
+        type=bool,
+        default=True,
         help="Skip samples already written in output_jsonl using split1.audio_path as key",
     )
     parser.add_argument("--config_path", type=str, default=None)
     args = parser.parse_args()
 
     if args.config_path:
-        args, config = apply_step_config(args, "step4_repeat_rewrite_main")
-        step_cfg = config["step4_repeat_rewrite_main"]
+        args, config = apply_step_config(args, "step5_repeat_rewrite_main")
+        step_cfg = config["step5_repeat_rewrite_main"]
         SYSTEM_PROMPT = step_cfg["system_prompt"]
         user_prompt_tmpl = jinja2.Template(step_cfg["user_prompt"])
 

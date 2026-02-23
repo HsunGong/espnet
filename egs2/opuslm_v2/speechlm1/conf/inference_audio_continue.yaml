@@ -5,6 +5,8 @@ num_hypo: 1
 enforce_modality: ["audio"]
 add_generation_prompt: false
 
+continuation_prefix_ratio: 0.8 #<- 0.5?
+
 audio:
   temperature: 0.8
   topk: 20

@@ -202,10 +202,10 @@ def main():
             spec_str = getattr(args, f"{split}_{spec_type}_specifier")
             if spec_str:
                 for spec in spec_str.split():
-                    specifiers.append((spec_type, spec))
+                    specifiers.append((split, spec_type, spec))
 
     # Process each specifier
-    for spec_type, specifier in specifiers:
+    for split, spec_type, specifier in specifiers:
         # Parse specifier and generate output filename
         parts = specifier.split(":")
         task, data_name = parts[0], parts[1]
@@ -216,10 +216,13 @@ def main():
             logger.info(f"Skipping {specifier} - stats already exist")
             continue
 
+        # train uses the configured num_workers; valid is lightweight, cap at 8
+        num_workers = args.num_workers if split == "train" else 8
+
         # Collect and save statistics
-        logger.info(f"Processing {spec_type} specifier: {specifier}")
+        logger.info(f"Processing {spec_type} specifier ({split}, nj={num_workers}): {specifier}")
         stats = collect_length_stats(
-            preprocessor, args.num_workers, spec_type, specifier
+            preprocessor, num_workers, spec_type, specifier
         )
         save_stats(stats, output_file)
 

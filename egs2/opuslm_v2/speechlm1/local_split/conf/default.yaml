@@ -1,0 +1,196 @@
+step0_prepare: {}
+
+step1_vad:
+  resume: true
+  vad_top_db: 40
+  rms_hop: 10 # ms
+  rms_db: -40
+  n_beat: 4
+  fallback_ratio: 0.5
+  min_ratio: 0.4
+  max_ratio: 0.75 # <- 0.6 ?
+
+step2_caption:
+  resume: true
+  vllm_url: "http://cnode1-001:8000/v1,http://cnode1-001:8001/v1,http://cnode1-001:8002/v1,http://cnode1-001:8003/v1,http://cnode1-001:8004/v1,http://cnode1-001:8005/v1,http://cnode1-001:8006/v1,http://cnode1-001:8007/v1,http://cnode1-002:8000/v1,http://cnode1-002:8001/v1,http://cnode1-002:8002/v1,http://cnode1-002:8003/v1,http://cnode1-002:8004/v1,http://cnode1-002:8005/v1,http://cnode1-002:8006/v1,http://cnode1-002:8007/v1,http://cnode1-005:8000/v1,http://cnode1-005:8001/v1,http://cnode1-005:8002/v1,http://cnode1-005:8003/v1,http://cnode1-005:8004/v1,http://cnode1-005:8005/v1,http://cnode1-005:8006/v1,http://cnode1-005:8007/v1,http://cnode1-010:8000/v1,http://cnode1-010:8001/v1,http://cnode1-010:8002/v1,http://cnode1-010:8003/v1,http://cnode1-010:8004/v1,http://cnode1-010:8005/v1,http://cnode1-010:8006/v1,http://cnode1-010:8007/v1"
+  model: "Qwen/Qwen3-Omni-30B-A3B-Captioner"
+  parallel_backend: "threading"
+
+step3_refine_caption:
+  vllm_url: "http://cnode1-002:8000/v1"
+  model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+  parallel_backend: "threading"
+  system_prompt: |-
+    You are an expert audio-caption consistency editor.
+
+    Task:
+    Align two segment captions (Split1, Split2) with a full-audio Main Caption. The Main Caption is the absolute ground truth for terminology, speakers, environment, and framing.
+
+    Strict Editing Rules:
+    1. Temporal Isolation: Each segment caption MUST describe ONLY the audio events occurring within its specific time span. Do NOT add events from outside the segment.
+    2. Absolute Alignment: Modify, delete, or add details in the segments ONLY to resolve contradictions with the Main Caption.
+    3. Minimal Intervention: Do not rewrite for style. Preserve original phrasing where possible. Make the smallest edit necessary.
+    4. No Meta-Language: NEVER use words like "main", "split", "segment", "Caption A/B". Each output must read as a standalone, natural audio caption.
+    5. Change Reporting: List edits concisely. If no changes are needed, output EXACTLY: "No changes needed."
+
+    Output EXACTLY in this JSON format:
+    {
+      "split1": { "refined_caption": "...", "changes": "..." },
+      "split2": { "refined_caption": "...", "changes": "..." }
+    }
+  user_prompt: |-
+    ## Main Caption (Ground Truth):
+    {{ main_caption }}
+
+    ## Split1 Caption:
+    {{ split1_caption }}
+
+    ## Split2 Caption:
+    {{ split2_caption }}
+
+    Output EXACTLY in this JSON format:
+    {
+      "split1": { "refined_caption": "...", "changes": "..." },
+      "split2": { "refined_caption": "...", "changes": "..." }
+    }
+
+step4_repeat_gen:
+  parallel_backend: "threading"
+  resume: true
+
+step5_repeat_rewrite_main:
+  vllm_url: "http://cnode1-002:8000/v1"
+  model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+  parallel_backend: "threading"
+  resume: true
+  system_prompt: |-
+    You are an expert audio-caption rewriter.
+
+    Task:
+    Write a NEW Main Caption for an audio file that consists of Split1 played TWICE consecutively (Split1 + Split1).
+
+    Guidelines & Priorities:
+    - Style Source: Use the original Main Caption strictly for writing style (depth, vocabulary).
+    - Content Source: Use Split1 strictly for facts (speech, sounds).
+    
+    Strict Rules:
+    1. The Sequence: You MUST describe the spoken content twice in chronological order. Rewrite the second rendering naturally (paraphrase or re-quote without copy-pasting).
+    2. Continuous Flow: Read as ONE continuous recording. Use natural transitions (e.g., "After a pause...", "The voice continues..."). Do NOT use words like "starts again", "repeats", "second clip".
+    3. Global Attributes: State global traits (environment, mic quality, background noise) EXACTLY ONCE near the beginning. Do NOT repeat them in the second half.
+    4. No Meta-Language: NEVER use terms like "main", "split", "segment", "repeat".
+
+    Output EXACTLY in this JSON format:
+    {
+      "main": {
+        "rewritten_caption": "...",
+        "changes": "Briefly describe how speech was rendered twice and global attributes were handled."
+      }
+    }
+  user_prompt: |-
+    ## Main Caption (Style Reference):
+    {{ main_caption }}
+
+    ## Split1 Caption (Content Source):
+    {{ split1_caption }}
+
+    ## Audio Composition:
+    Split1 + Split1 (repeated once consecutively)
+
+step6_repeat_caption:
+  vllm_url: "http://cnode1-001:8000/v1,http://cnode1-001:8001/v1,http://cnode1-001:8002/v1,http://cnode1-001:8003/v1,http://cnode1-001:8004/v1,http://cnode1-001:8005/v1,http://cnode1-001:8006/v1,http://cnode1-001:8007/v1,http://cnode1-002:8000/v1,http://cnode1-002:8001/v1,http://cnode1-002:8002/v1,http://cnode1-002:8003/v1,http://cnode1-002:8004/v1,http://cnode1-002:8005/v1,http://cnode1-002:8006/v1,http://cnode1-002:8007/v1,http://cnode1-005:8000/v1,http://cnode1-005:8001/v1,http://cnode1-005:8002/v1,http://cnode1-005:8003/v1,http://cnode1-005:8004/v1,http://cnode1-005:8005/v1,http://cnode1-005:8006/v1,http://cnode1-005:8007/v1,http://cnode1-010:8000/v1,http://cnode1-010:8001/v1,http://cnode1-010:8002/v1,http://cnode1-010:8003/v1,http://cnode1-010:8004/v1,http://cnode1-010:8005/v1,http://cnode1-010:8006/v1,http://cnode1-010:8007/v1"
+  model: "Qwen/Qwen3-Omni-30B-A3B-Captioner"
+  parallel_backend: "threading"
+  resume: true
+
+step7_edit_split2_merge_main:
+  vllm_url: "http://cnode1-002:8000/v1"
+  model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+  parallel_backend: "threading"
+  resume: false
+  system_prompt: |-
+    You are an expert audio-caption editor. You have TWO tasks.
+
+    Task 1: Edit Split2 Caption (Minimal Edit)
+    Modify the Split2 caption using THESE STRICT LIMITS:
+    - MANDATORY: Edit exactly ONE speech content element (e.g., change a word, alter lyrics, remove a phrase).
+    - OPTIONAL: Edit up to TWO non-speech audio elements (e.g., background sound, vocal trait, recording quality).
+    - Preserved Content: Do NOT rewrite the whole caption. Leave unedited parts exactly as they are.
+
+    Task 2: Generate New Main Caption (Merge)
+    Create a unified Main Caption representing Split1 + Edited-Split2.
+    - Style: Match the original Main Caption's tone and density.
+    - Chronology: Describe Split1 events, smoothly transitioning into Edited-Split2 events.
+    - Consistency: Ensure speakers, background noise, and mic quality remain consistent. Do not redundantly restate global attributes.
+    - No Meta-Language: NEVER use words like "split", "main", "segment", "merged". It must read as a single continuous track.
+
+    Output EXACTLY in this JSON format:
+    {
+      "split2": {
+        "edited_caption": "...",
+        "changes": "- <speech change>\n- <audio change>"
+      },
+      "main": {
+        "edited_caption": "...",
+        "changes": "- <merge logic>"
+      }
+    }
+  user_prompt: |-
+    ## Main Caption (Style Reference):
+    {{ main_caption }}
+
+    ## Split1 Caption:
+    {{ split1_caption }}
+
+    ## Split2 Caption (To be edited):
+    {{ split2_caption }}
+
+step8_edit_split1_merge_main:
+  vllm_url: "http://cnode1-002:8000/v1"
+  model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+  parallel_backend: "threading"
+  resume: false
+  system_prompt: |-
+    You are an expert audio-caption editor. You have TWO tasks.
+
+    Task 1: Generate Split1_Edited (Minimal Edit)
+    Create a variation of the Split1 caption using THESE STRICT LIMITS:
+    - MANDATORY: Edit exactly ONE speech content element (e.g., alter lyrics, change a word, modify phrasing).
+    - OPTIONAL: Edit up to TWO non-speech audio elements (e.g., change vocal tone, background noise).
+    - Preserved Content: Leave all other elements exactly as they are. Do not rewrite from scratch.
+
+    Task 2: Generate New Main Caption (Merge)
+    Create a unified Main Caption representing Split1_Original + Split1_Edited played consecutively.
+    - Chronology: Describe the original pass, transitioning smoothly into the edited pass.
+    - Full Completeness: The spoken speech/lyrics from Split1_Edited MUST be written out IN FULL during the second pass. Do NOT summarize or skip lines.
+    - Global Attributes: State environmental/mic traits ONCE at the beginning. Do NOT restate them for the second pass.
+    - Flow: Use natural transitions ("The voice continues..."). NEVER use words like "repeat", "second pass", "split", "original", or "edited".
+
+    Output EXACTLY in this JSON format:
+    {
+      "split1": {
+        "edited_caption": "...",
+        "changes": "- <speech change>\n- <audio change>..."
+      },
+      "main": {
+        "edited_caption": "...",
+        "changes": "- <merge logic and decisions>"
+      }
+    }
+  user_prompt: |-
+    ## Split1 Caption (Original):
+    {{ split1_caption }}
+
+    ## Target Audio Composition:
+    Split1_Original (first pass) + Split1_Edited (second pass)
+
+    Output EXACTLY in this JSON format:
+    {
+      "split1": {
+        "edited_caption": "...",
+        "changes": "- <speech change>\n- <audio change>..."
+      },
+      "main": {
+        "edited_caption": "...",
+        "changes": "- <merge logic and decisions>"
+      }
+    }

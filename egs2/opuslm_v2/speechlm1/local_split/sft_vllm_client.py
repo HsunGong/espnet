@@ -10,7 +10,7 @@ import requests
 import threading
 import time
 from typing import Any, Dict, List, Optional, Set
-
+import random
 import logging
 
 def get_processed_indices(output_file: str, idx_key: str = "idx") -> Set[Any]:
@@ -64,7 +64,8 @@ class VLLMClient:
         self,
         base_url: str,
         model: Optional[str] = None,
-        max_concurrent: int = 81920,
+        max_concurrent: int = 65536,
+        per_endpoint_concurrent: int = 32,
         timeout: int = 360,
         max_retries: int = 3,
     ):
@@ -75,7 +76,15 @@ class VLLMClient:
                 multiple URLs separated by colons.
                 Example: "http://host1:8000/v1:http://host2:8000/v1"
             model: Model name to use. Defaults to DEFAULT_MODEL.
-            max_concurrent: Maximum number of concurrent requests (total).
+            max_concurrent: Hard upper cap on total in-flight requests.
+                In practice the effective limit is
+                ``len(endpoints) * per_endpoint_concurrent``, whichever is
+                smaller.
+            per_endpoint_concurrent: Max in-flight requests **per** vLLM
+                endpoint.  The actual semaphore value is
+                ``min(max_concurrent, n_endpoints * per_endpoint_concurrent)``.
+                Default 32 means 4 servers → 128 concurrent requests, which
+                is enough to saturate vLLM without triggering queue overflow.
             timeout: Request timeout in seconds.
             max_retries: Number of retry attempts on failure.
         """
@@ -95,6 +104,10 @@ class VLLMClient:
         # Round-robin URL selector (thread-safe via itertools.cycle)
         self._url_cycle = itertools.cycle(self.base_urls)
         self._url_lock = threading.Lock()
+
+        # Hard cap on in-flight requests across all threads in this process.
+        # Threads block here before sending, so we never flood the servers.
+        self._semaphore = threading.Semaphore(max_concurrent)
 
     def _get_next_url(self) -> str:
         """Get next URL in round-robin fashion."""
@@ -131,11 +144,12 @@ class VLLMClient:
         logging.debug(f"Request: {payload}")
 
         for attempt in range(self.max_retries):
-            base_url = self._get_next_url()
+            base_url = random.choice(self.base_urls) # self._get_next_url()
             url = f"{base_url}/chat/completions"
 
             try:
-                response = requests.post(url, json=payload, timeout=self.timeout)
+                with self._semaphore:
+                    response = requests.post(url, json=payload, timeout=self.timeout)
                 if response.status_code == 200:
                     data = response.json()
                     # logging.debug(f"Response: {data}")

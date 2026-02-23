@@ -14,12 +14,13 @@ from local_split.local_config import apply_step_config
 from local_split.jsonl_parallel_runner import JsonlParallelRunner
 
 SILENCE = 0.
+SKIP_GEN = False
 
 def build_repeat1_path(split1_audio_path: str, silence: float = 0.) -> str:
     """Convert `/path/to/foo.wav` -> `/path/to/foo.repeat1.wav`."""
     p = Path(split1_audio_path)
     if p.suffix:
-        return str(p.with_suffix(f".repeat1.sil{silence:.1f}{p.suffix}"))
+        return str(p.with_suffix(f".repeat1.sil{silence:.1f}.flac"))
     return str(p.with_name(f"{p.name}.repeat1.sil{silence:.1f}.flac"))
 
 
@@ -30,12 +31,18 @@ def repeat_split1_audio(split1_audio_path: str, silence: float = 0.) -> tuple[st
         (new_audio_path, duration_seconds)
     """
     audio, sr = sf.read(split1_audio_path)
+    if audio.ndim > 1:
+        # multi-channel audio force to single channel
+        audio = np.mean(audio, axis=1)
 
-    # with some silence?
-    silence_audio = np.zeros(int(sr * silence))
+    if silence:
+        # with some silence?
+        silence_audio = np.zeros(int(sr * silence))
 
-    # axis=0 repeats on time dimension for both mono and multi-channel audio
-    repeated = np.concatenate([audio, silence_audio, audio], axis=0)
+        # axis=0 repeats on time dimension for both mono and multi-channel audio
+        repeated = np.concatenate([audio, silence_audio, audio], axis=0)
+    else:
+        repeated = np.concatenate([audio, audio], axis=0)
 
     out_path = build_repeat1_path(split1_audio_path, silence=silence)
     out_dir = os.path.dirname(out_path)
@@ -56,23 +63,23 @@ def process_one(idx: int, line: str) -> dict | None:
 
         if not split1_audio_path:
             return None
-        if not os.path.exists(split1_audio_path):
+        if not SKIP_GEN and not os.path.exists(split1_audio_path):
             logging.warning(f"Skip line {idx}: split1 audio not found: {split1_audio_path}")
             return None
 
-        repeated_audio_path, repeated_duration = repeat_split1_audio(split1_audio_path, silence=SILENCE)
-
         metadata_out = record
 
-        metadata_out["main"]["audio_path"] = repeated_audio_path
-        metadata_out["main"]["duration"] = repeated_duration
-        # metadata_out["main"]["audio_caption"] = "" #<- TODO
+        if not SKIP_GEN:
+            repeated_audio_path, repeated_duration = repeat_split1_audio(split1_audio_path, silence=SILENCE)
+            metadata_out["main"]["audio_path"] = repeated_audio_path
+            metadata_out["main"]["duration"] = repeated_duration
+            # metadata_out["main"]["audio_caption"] = "" #<- TODO
 
         # Keep split2 fully aligned with split1 content.
         metadata_out["split2"] = copy.deepcopy(split1_data)
         return metadata_out
     except Exception as e:
-        logging.warning(f"Error processing line {idx}: {e}")
+        logging.warning(f"Error processing line {idx}, error is {e}\n\tLine content: {line}")
         return None
 
 
@@ -99,7 +106,8 @@ def main():
     )
     parser.add_argument(
         "--resume",
-        action="store_true",
+        type=bool,
+        default=True,
         help="Skip samples already written in output_jsonl using split1.audio_path as key",
     )
     parser.add_argument("--nj", type=int, default=1, help="Number of parallel workers")
@@ -111,13 +119,21 @@ def main():
         help="joblib backend",
     )
     parser.add_argument("--config_path", type=str, default=None)
+    parser.add_argument(
+        "--skip_gen",
+        type=lambda x: x.lower() in ("true", "1", "yes"),
+        default=False,
+        metavar="BOOL",
+        help="If true, skip audio synthesis and do not set main.audio_path/duration",
+    )
     args = parser.parse_args()
 
     if args.config_path:
         args, _ = apply_step_config(args, "step4_repeat_gen")
 
-    global SILENCE
+    global SILENCE, SKIP_GEN
     SILENCE = args.silence if hasattr(args, "silence") else 0.
+    SKIP_GEN = args.skip_gen
 
     runner = JsonlParallelRunner(
         input_jsonl=str(args.input_jsonl),

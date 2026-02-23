@@ -44,7 +44,7 @@ if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
     --valid-registered-specifier "${valid_registered_specifier}" \
     --train-config ${train_config} \
     --output-dir ${stats_dir} \
-    --num-workers 16
+    --num-workers 192
 fi
 
 
