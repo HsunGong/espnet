@@ -1,0 +1,29 @@
+# Optional dependencies for advanced scorers.
+# Install only what you need.
+
+# Pseudo-MOS / UTMOS / DNSMOS
+torch>=2.1
+# utmosv2 # https://github.com/wavlab-speech/versa/blob/main/tools/install_utmosv2.sh
+speechmos
+onnxruntime
+
+# Emotion scorer
+modelscope
+scikit-learn
+
+# 3D-Speaker scorer
+torchaudio>=2.1
+speakerlab
+kaldiio
+
+PyYAML>=6.0
+Jinja2>=3.1
+tqdm>=4.66
+requests>=2.31
+numpy>=1.24
+soundfile>=0.12
+librosa>=0.10
+pyloudnorm>=0.1.1
+jiwer>=3.0
+openai-whisper>=20231117
+

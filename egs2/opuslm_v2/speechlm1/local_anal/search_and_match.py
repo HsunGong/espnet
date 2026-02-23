@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import soundfile as sf
 
-DATA_DIR = Path("/mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/part2_4/dur_20_30.debug")
+DATA_DIR = Path("/mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/part2_4/debug")
 
 
 def parse_args():
@@ -26,7 +26,7 @@ def match_keys(s: str, keys, mode: str) -> bool:
 
 def scan_jsonl(name_keys, path_keys, mode):
     # jsonl scan: name_key filters filename; path_key filters raw line text (fast substring)
-    for jf in DATA_DIR.glob("metadata.*.jsonl"):
+    for jf in DATA_DIR.rglob("metadata.*.jsonl"):
         if not match_keys(jf.name, name_keys, mode):
             continue
         with jf.open("r", encoding="utf-8") as f:

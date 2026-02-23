@@ -68,6 +68,7 @@ class VLLMClient:
         per_endpoint_concurrent: int = 32,
         timeout: int = 360,
         max_retries: int = 3,
+        default_kwargs: dict = {},
     ):
         """Initialize the vLLM client.
 
@@ -103,16 +104,17 @@ class VLLMClient:
 
         # Round-robin URL selector (thread-safe via itertools.cycle)
         self._url_cycle = itertools.cycle(self.base_urls)
-        self._url_lock = threading.Lock()
+        # self._url_lock = threading.Lock()
 
         # Hard cap on in-flight requests across all threads in this process.
         # Threads block here before sending, so we never flood the servers.
-        self._semaphore = threading.Semaphore(max_concurrent)
+        # self._semaphore = threading.Semaphore(max_concurrent)
+        self.default_kwargs = default_kwargs
 
-    def _get_next_url(self) -> str:
-        """Get next URL in round-robin fashion."""
-        with self._url_lock:
-            return next(self._url_cycle)
+    # def _get_next_url(self) -> str:
+    #     """Get next URL in round-robin fashion."""
+    #     with self._url_lock:
+    #         return next(self._url_cycle)
 
     def chat_completion(
         self,
@@ -133,6 +135,9 @@ class VLLMClient:
         Returns:
             Generated text content, or None if all retries failed.
         """
+        for k in self.default_kwargs.keys():
+            kwargs.setdefault(k, self.default_kwargs[k])
+
         payload = {
             "model": self.model,
             "messages": messages,
@@ -148,8 +153,7 @@ class VLLMClient:
             url = f"{base_url}/chat/completions"
 
             try:
-                with self._semaphore:
-                    response = requests.post(url, json=payload, timeout=self.timeout)
+                response = requests.post(url, json=payload, timeout=self.timeout)
                 if response.status_code == 200:
                     data = response.json()
                     # logging.debug(f"Response: {data}")

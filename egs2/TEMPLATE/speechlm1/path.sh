@@ -42,6 +42,10 @@ export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:./data/debug.yaml"
 export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:/mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/part2_4/debug/data.yaml"
 export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:/mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/part2_4/full/data.yaml"
 
+
+export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:/mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/test_clean/speech_edit/dialogues/data.yaml"
+export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:/mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/test_clean/audio_edit/dialogues/data.yaml"
+
 # NOTE(Jinchuan): For DeltaAI users, un-comment this for network setup
 # export NCCL_DEBUG=WARN
 # export NCCL_SOCKET_IFNAME=hsn

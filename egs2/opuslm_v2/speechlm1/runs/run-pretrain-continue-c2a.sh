@@ -65,16 +65,49 @@ valid_sets+="dialogue:part2_4_debug-vad-music.min_10-dialogue.step4.cat2main.def
 valid_sets+="dialogue:part2_4_debug-vad-music.min_10-dialogue.step6.main2main.default "
 
 test_sets=""
-test_sets+=""
-test_sets+="dialogue:part2_4_debug-vad-speech.min_20.max_25-dialogue.step2.cat2split1 "
-test_sets+="dialogue:part2_4_debug-vad-speech.min_20.max_25-dialogue.step4.cat2split1.default "
-test_sets+="dialogue:part2_4_debug-vad-speech.min_20.max_25-dialogue.step8.main2split1.default "
+# test_sets+="dialogue:part2_4_debug-vad-speech.min_20.max_25-dialogue.step1.main2split1 "
+# test_sets+="dialogue:part2_4_debug-vad-speech.min_20.max_25-dialogue.step2.cat2split1 "
+# test_sets+="dialogue:part2_4_debug-vad-speech.min_20.max_25-dialogue.step4.cat2split1.default "
+# test_sets+="dialogue:part2_4_debug-vad-speech.min_20.max_25-dialogue.step5.main2split1.default "
+# test_sets+="dialogue:part2_4_debug-vad-speech.min_20.max_25-dialogue.step6.main2split1.default "
+# test_sets+="dialogue:part2_4_debug-vad-speech.min_20.max_25-dialogue.step8.cat2split1.default "
+# test_sets+="dialogue:part2_4_debug-vad-speech.min_20.max_25-dialogue.step8.main2split1.default "
 
-test_sets+="dialogue:part2_4_debug-vad-music.min_10-dialogue.step2.cat2split1 "
-test_sets+="dialogue:part2_4_debug-vad-music.min_10-dialogue.step4.cat2split1.default "
-test_sets+="dialogue:part2_4_debug-vad-music.min_10-dialogue.step8.main2split1.default "
+# test_sets+="dialogue:part2_4_debug-vad-music.min_10-dialogue.step1.main2split1 "
+# test_sets+="dialogue:part2_4_debug-vad-music.min_10-dialogue.step2.cat2split1 "
+# test_sets+="dialogue:part2_4_debug-vad-music.min_10-dialogue.step4.cat2split1.default "
+# test_sets+="dialogue:part2_4_debug-vad-music.min_10-dialogue.step5.main2split1.default "
+# test_sets+="dialogue:part2_4_debug-vad-music.min_10-dialogue.step6.main2split1.default "
+# test_sets+="dialogue:part2_4_debug-vad-music.min_10-dialogue.step8.cat2split1.default "
+# test_sets+="dialogue:part2_4_debug-vad-music.min_10-dialogue.step8.main2split1.default "
 
+# test_sets+="dialogue:part2_4_debug-novad-sound.min_10-dialogue.step0.main2split1 "
+# test_sets+="dialogue:part2_4_debug-novad-sound.min_10-dialogue.step4.cat2split1.default "
+# test_sets+="dialogue:part2_4_debug-novad-sound.min_10-dialogue.step6.main2split1.default "
+# test_sets+="dialogue:part2_4_debug-novad-sound.min_10-dialogue.step8.cat2split1.default "
+# test_sets+="dialogue:part2_4_debug-novad-sound.min_10-dialogue.step8.main2split1.default "
 
+test_sets+="dialogue:eval-test_clean-v1-transcription_del-cat2split1 "
+test_sets+="dialogue:eval-test_clean-v1-transcription_ins-cat2split1 "
+test_sets+="dialogue:eval-test_clean-v1-transcription_sub-cat2split1 "
+test_sets+="dialogue:eval-test_clean-v1-transcription_replace_sentence-cat2split1 "
+test_sets+="dialogue:eval-test_clean-v1-transcription_add_paralinguistic-cat2split1 "
+test_sets+="dialogue:eval-test_clean-v1-style_emotion-cat2split1 "
+test_sets+="dialogue:eval-test_clean-v1-style_whisper-cat2split1 "
+test_sets+="dialogue:eval-test_clean-v1-audio_effect_dereverb-cat2split1 "
+test_sets+="dialogue:eval-test_clean-v1-audio_effect_pitch-cat2split1 "
+test_sets+="dialogue:eval-test_clean-v1-audio_effect_reverb-cat2split1 "
+test_sets+="dialogue:eval-test_clean-v1-audio_effect_speed-cat2split1 "
+test_sets+="dialogue:eval-test_clean-v1-audio_effect_volume-cat2split1 "
+test_sets+="dialogue:eval-test_clean_mmau-v1-music_add_mix-cat2split1 "
+test_sets+="dialogue:eval-test_clean_mmau-v1-music_remove_mix-cat2split1 "
+test_sets+="dialogue:eval-test_clean_mmau-v1-music_replace_mix-cat2split1 "
+test_sets+="dialogue:eval-test_clean_mmau-v1-sound_add_mix-cat2split1 "
+test_sets+="dialogue:eval-test_clean_mmau-v1-sound_remove_mix-cat2split1 "
+test_sets+="dialogue:eval-test_clean_mmau-v1-sound_replace_mix-cat2split1 "
+test_sets+="dialogue:eval-test_clean_mmau-v1-speech_add_mix-cat2split1 "
+test_sets+="dialogue:eval-test_clean_mmau-v1-speech_remove_mix-cat2split1 "
+test_sets+="dialogue:eval-test_clean_mmau-v1-speech_replace_mix-cat2split1 "
 
 
 bash launch_opuslm_stage3_sft.sh \
@@ -83,7 +116,7 @@ bash launch_opuslm_stage3_sft.sh \
     --test_registered_specifier "$test_sets" \
     --inference_nj 8 --inference_workers 2 \
     --resume_path /mnt/home/jinchuat-andr-d6b58f/jinchuat/espnet_sft/egs2/opuslm_v2/speechlm1/exp/opuslm_v2_stage2_pretrain_base/checkpoints/step_350000 \
-    --train_config conf/train_stage3_mt.yaml \
+    --train_config conf/train_stage3_ct.yaml \
     --inference_config conf/inference_audio_continue.yaml \
     --exp_dir exp/ct-100k-default-c2a \
     "$@"

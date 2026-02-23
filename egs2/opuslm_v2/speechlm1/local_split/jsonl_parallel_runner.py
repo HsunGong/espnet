@@ -14,7 +14,7 @@ class JsonlParallelRunner:
         output_jsonl: str,
         process_fn: Callable[[int, str], dict | None],
         n_jobs: int,
-        backend: str = "threading",
+        backend: str | None = None,
         desc: str = "Processing",
         resume: bool = False,
         resume_key_fn: Callable[[dict], str] | None = None,
@@ -83,7 +83,9 @@ class JsonlParallelRunner:
         if self.resume:
             print(f"Resume skip count: {skipped_done}")
 
-        pbar = tqdm(total=len(lines), desc=self.desc + f"with nj={self.n_jobs}, backend={self.backend}")
+        pbar = tqdm(total=len(lines), desc=self.desc + f" with nj={self.n_jobs}, backend={self.backend}")
+        success = 0
+        fail = 0
         with open(self.output_jsonl, write_mode, encoding="utf-8") as fout:
             for ret in Parallel(
                 n_jobs=self.n_jobs,
@@ -95,5 +97,10 @@ class JsonlParallelRunner:
             ):
                 if ret is not None:
                     fout.write(json.dumps(ret, ensure_ascii=False) + "\n")
+                    success += 1
+                else:
+                    fail += 1
                 pbar.update(1)
+                pbar.set_postfix(success=success, fail=fail, refresh=False)
         pbar.close()
+        print("Finished processing output file", self.output_jsonl)

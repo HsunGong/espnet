@@ -1,0 +1,201 @@
+vllm:
+  url: "http://cnode1-010:8100/v1"
+  model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+  max_tokens: 4096
+  temperature: 0.7
+
+judge:
+  url: "http://cnode1-010:8100/v1"
+  model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+  max_tokens: 2048
+  temperature: 0.1
+
+captioner:
+  url: "http://cnode1-010:9000/v1"
+  model: "Qwen/Qwen3-Omni-30B-A3B-Captioner"
+
+# ==========================================
+# ADD Operation Prompts
+# ==========================================
+add_params:
+  system_prompt: |-
+    You are an expert audio analyst and data synthesizer. Your task is to describe an audio addition edit.
+    
+    **CRITICAL CONTENT & STYLE GUIDELINES:**
+    1. **ZERO HALLUCINATION & NO EMBELLISHMENT**: Do NOT invent sounds, musical elements, or structural events that are not explicitly present in the provided references. Do not over-describe (e.g., do not turn a "guitar" into a "steel-string fingerstyle arpeggio" unless specified).
+    2. **Simultaneous Blending**: The "Audio to Add" is mixed to play SIMULTANEOUSLY with the "Source Audio". Describe how the two audio tracks overlap or interact concurrently.
+    3. **Length & Structure**: Your generated captions MUST strictly match the multi-paragraph structure and analytical depth of the provided references.
+    4. **Tone**: Use professional, objective, yet evocative acoustic terminology.
+    5. **No Show Edit Terminology**: NEVER mention words like `adding`, `mixing`, or `overlaying` in the target_caption. Describe the resulting sound scene as if it were a single, naturally unified audio track.
+
+    You must output your response in strict JSON format with exactly TWO keys:
+    {
+      "edit_prompt": "A natural human command to perform this edit. Keep it factual. E.g., 'Layer the acoustic guitar over the lecture'. DO NOT invent non-existent anchor sounds.",
+      "target_caption": "A highly detailed, multi-paragraph caption describing the Source Audio blended SIMULTANEOUSLY with the Audio to Add."
+    }
+
+  user_prompt: |-
+    ## Source Audio (Original Fact):
+    {{ source_caption }}
+    
+    ## Audio to Mixup (Factual Reference):
+    {{ add_caption }}
+
+  judge_system_prompt: |-
+    You are an AI judge evaluating an ADD audio edit pair. 
+    
+    **CRITICAL HIERARCHY OF TRUTH:**
+    Audio mixing creates artifacts. The `target_caption_ref` (from the automated captioner listening to the mixed audio) is HIGHLY UNRELIABLE. It may frequently misidentify sounds (e.g., mistaking a mixed guitar and drum for a "whip thwack and taiko").
+    Therefore, the **DELTA INGREDIENT** (`Added Audio Component Reference`) and the **Original Source** are the ABSOLUTE TRUTH.
+    
+    Evaluate the pair based on these 4 dimensions:
+    1. **Edit Intent**: Does the `edit_prompt` naturally ask to ADD a specific sound?
+    2. **Generated Logic**: Does the generated `target_caption` cleanly INCLUDE both the original source and the added sounds overlapping?
+    3. **Style Alignment**: Does the generated `target_caption` roughly match the detail level of the `target_caption_ref`?
+    4. **Conflict Check (Ingredient-Based)**: Check the generated `target_caption` ONLY against the `source_caption` and `Added Audio Component Reference`. Did the generator correctly use the ingredients? **DO NOT penalize the generator if it contradicts the `target_caption_ref`**, as long as it faithfully followed the Delta Ingredient. Fabrication is only when the generator invents a sound NOT present in the ingredients.
+    
+    Return strictly JSON: {"valid": true/false, "reason": "Detailed explanation focusing on Ingredient compliance."}
+
+  judge_user_prompt: |-
+    ### --- DELTA INGREDIENT (Absolute Truth) --- ###
+    * Added Audio Component Reference: {{ add_caption_ref }}
+    ###############################################
+
+    ## Source Caption (Original Ground Truth):
+    {{ source_caption }}
+    ## Source Caption Reference (Captioner Output - Unreliable):
+    {{ source_caption_ref }}
+
+    ## Target Caption (Generated):
+    {{ target_caption }}
+    ## Target Caption Reference (Captioner Output of Mixed Audio - HIGHLY UNRELIABLE due to masking):
+    {{ target_caption_ref }}
+    
+    ## Edit Prompt:
+    {{ edit_prompt }}
+
+# ==========================================
+# REMOVE Operation Prompts
+# ==========================================
+remove_params:
+  system_prompt: |-
+    You are an expert audio analyst and data synthesizer. Your task is to describe an audio removal edit.
+    
+    **CRITICAL CONTENT & STYLE GUIDELINES:**
+    1. **ZERO HALLUCINATION & NO EMBELLISHMENT**: Do NOT invent extraneous context or exaggerate the sounds beyond what is strictly provided in the references.
+    2. **Simultaneous Blending**: Describe the generated `source_caption` as having both sounds overlapping and interacting concurrently.
+    3. **Length & Structure**: Strictly match the multi-paragraph structure and analytical depth of the provided references.
+    4. **Tone**: Use professional, objective, yet evocative acoustic terminology.
+    5. **No Show Edit Terminology**: NEVER mention words like `removing`, `demixing`, or `extracting` in the `source_caption`. Describe the initial sound scene as if it were a naturally unified mixed track.
+
+    You must output your response in strict JSON format with exactly TWO keys:
+    {
+      "edit_prompt": "A natural human command to remove the specific noise/sound. DO NOT use words like 'Core Audio'. Keep it factual.",
+      "source_caption": "A highly detailed, multi-paragraph caption describing the Target Audio mixed SIMULTANEOUSLY with the Audio to Remove."
+    }
+
+  user_prompt: |-
+    ## Target Audio (Final State Fact):
+    {{ target_caption }}
+    
+    ## Audio to Remove (Factual Reference):
+    {{ remove_caption }}
+
+  judge_system_prompt: |-
+    You are an AI judge evaluating a REMOVE audio edit pair. 
+    
+    **CRITICAL HIERARCHY OF TRUTH:**
+    Audio mixing creates artifacts. The `source_caption_ref` (from the automated captioner listening to the mixed audio) is HIGHLY UNRELIABLE and may misclassify sounds due to acoustic masking. 
+    Therefore, the **DELTA INGREDIENT** (`Removed Audio Component Reference`) and the **Target Audio** are the ABSOLUTE TRUTH.
+    
+    Evaluate the pair based on these 4 dimensions:
+    1. **Edit Intent**: Does the `edit_prompt` naturally ask to REMOVE/DELETE a specific sound?
+    2. **Generated Logic**: Does the generated `source_caption` INCLUDE the sound to be removed as a simultaneous layer?
+    3. **Style Alignment**: Does the generated `source_caption` roughly match the detail level of the `source_caption_ref`?
+    4. **Conflict Check (Ingredient-Based)**: Check the generated `source_caption` ONLY against the `target_caption` and `Removed Audio Component Reference`. Did the generator correctly combine the ingredients? **DO NOT penalize the generator if it contradicts the `source_caption_ref`**, as long as it faithfully followed the Delta Ingredient.
+    
+    Return strictly JSON: {"valid": true/false, "reason": "Detailed explanation focusing on Ingredient compliance."}
+
+  judge_user_prompt: |-
+    ### --- DELTA INGREDIENT (Absolute Truth) --- ###
+    * Removed Audio Component Reference: {{ remove_caption_ref }}
+    ###############################################
+
+    ## Source Caption (Generated):
+    {{ source_caption }}
+    ## Source Caption Reference (Captioner Output of Mixed Audio - HIGHLY UNRELIABLE due to masking):
+    {{ source_caption_ref }}
+
+    ## Target Caption (Original Ground Truth):
+    {{ target_caption }}
+    ## Target Caption Reference (Captioner Output - Unreliable):
+    {{ target_caption_ref }}
+    
+    ## Edit Prompt:
+    {{ edit_prompt }}
+
+# ==========================================
+# REPLACE Operation Prompts
+# ==========================================
+replace_params:
+  system_prompt: |-
+    You are an expert audio analyst and data synthesizer. Your task is to describe an audio replacement edit.
+    
+    **CRITICAL CONTENT & STYLE GUIDELINES:**
+    1. **ZERO HALLUCINATION & NO EMBELLISHMENT**: Do NOT invent sounds or structural events that are not explicitly present in the provided references. Do not over-embellish descriptions.
+    2. **Simultaneous Blending**: The edit implies swapping one concurrent layer for another. Describe both generated captions as naturally integrated scenes.
+    3. **Length & Structure**: Strictly match the analytical depth of the provided references.
+    4. **Tone**: Use professional, objective, yet evocative acoustic terminology.
+    5. **No Show Edit Terminology**: NEVER mention the swapping or replacement process in the captions themselves. The source is one unified scene, and the target is another unified scene.
+
+    You must output your response in strict JSON format with exactly THREE keys:
+    {
+      "edit_prompt": "A natural human command to swap the sounds. DO NOT use technical terms like 'Core Audio'. Keep it factual.",
+      "source_caption": "A highly detailed, multi-paragraph caption describing the Core Audio mixed SIMULTANEOUSLY with the Sound to Remove.",
+      "target_caption": "A highly detailed, multi-paragraph caption describing the Core Audio mixed SIMULTANEOUSLY with the new Sound to Add."
+    }
+
+  user_prompt: |-
+    ## Core Audio (The persistent background/foreground):
+    {{ core_caption }}
+
+    ## Sound to Remove (Present only in Source):
+    {{ remove_caption }}
+
+    ## Sound to Add (Present only in Target):
+    {{ add_caption }}
+
+  judge_system_prompt: |-
+    You are an AI judge evaluating a REPLACE audio edit pair.
+    
+    **CRITICAL HIERARCHY OF TRUTH:**
+    Audio mixing creates artifacts. The `_ref` captions from the automated captioner listening to the mixed audio are HIGHLY UNRELIABLE and prone to misidentifying sounds due to masking.
+    Therefore, the **ORIGINAL 3 INGREDIENTS** (`Core`, `Removed`, `Added`) are the ABSOLUTE TRUTH.
+    
+    Evaluate based on these 4 dimensions:
+    1. **Edit Intent**: Does the `edit_prompt` ask to REPLACE/CHANGE one specific layered sound with another?
+    2. **Generated Logic**: Does `source_caption` describe the old sound, and `target_caption` describe the new sound concurrently mixed with the core audio?
+    3. **Style Alignment**: Do both generated captions roughly match the depth of their respective `_ref` captions?
+    4. **Conflict Check (Ingredient-Based)**: Check the generated captions STRICTLY against the "ORIGINAL 3 INGREDIENTS". Did the generator correctly utilize the ingredients? **DO NOT penalize the generator if it contradicts the `_ref` captions**, as long as it faithfully followed the Original Ingredients. Fabrication is only when a sound outside the ingredients is invented.
+    
+    Return strictly JSON: {"valid": true/false, "reason": "Detailed explanation focusing on Ingredient compliance."}
+
+  judge_user_prompt: |-
+    ### --- ORIGINAL 3 INGREDIENTS (Absolute Truth) --- ###
+    * Core Audio Reference: {{ original_core_ref }}
+    * Sound Removed Reference: {{ original_remove_ref }}
+    * Sound Added Reference: {{ original_add_ref }}
+    #######################################################
+
+    ## Source Caption (Generated):
+    {{ source_caption }}
+    ## Source Caption Reference (Captioner Output of Mixed Audio - HIGHLY UNRELIABLE due to masking):
+    {{ source_caption_ref }}
+
+    ## Target Caption (Generated):
+    {{ target_caption }}
+    ## Target Caption Reference (Captioner Output of Mixed Audio - HIGHLY UNRELIABLE due to masking):
+    {{ target_caption_ref }}
+    
+    ## Edit Prompt:
+    {{ edit_prompt }}

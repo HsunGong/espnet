@@ -54,15 +54,6 @@ MODE_CHOICES = [
     "a2t_t2a",  # Audio1 -> Caption1 (turn1) ; Caption2 -> Audio2 (turn2)
 ]
 
-# Back-compat: old (caption_mode, audio_mode) pairs → new mode name
-_LEGACY_MAP: dict[tuple[str, str], str] = {
-    ("concat_split", "split1"): "cat2split1",
-    ("main", "split1"): "main2split1",
-    ("concat_split", "main"): "cat2main",
-    ("main", "main"): "main2main",
-}
-
-
 # ---------------------------------------------------------------------------
 # Message builder
 # ---------------------------------------------------------------------------
@@ -165,12 +156,6 @@ def main() -> None:
 
     # Resolve mode
     mode = args.mode
-    if mode is None:
-        legacy_key = (args.caption_mode, args.audio_mode)
-        mode = _LEGACY_MAP.get(legacy_key)
-        if mode is None:
-            mode = "main2split1"  # safe default
-
     args.output_jsonl.parent.mkdir(parents=True, exist_ok=True)
     output_json = args.output_jsonl.with_suffix(".json")
 

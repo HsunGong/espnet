@@ -1,0 +1,102 @@
+# ==========================================
+# 1. 文本编辑类 (Transcription Edits)
+# 目标: 准确生成目标文本，保持音色和音质一致
+# ==========================================
+transcription_ins:
+  metrics:
+    - name: "wer"
+      target_text_key: "target_text"
+    - name: "utmos"
+    - name: "speaker_similarity" # 比较 original_audio 和 generated_audio 的音色相似度
+
+transcription_del:
+  metrics:
+    - name: "wer"
+      target_text_key: "target_text"
+    - name: "utmos"
+    - name: "speaker_similarity"
+
+transcription_sub:
+  metrics:
+    - name: "wer"
+      target_text_key: "target_text"
+    - name: "utmos"
+    - name: "speaker_similarity"
+
+transcription_replace_sentence:
+  metrics:
+    - name: "wer"
+      target_text_key: "target_text"
+    - name: "utmos"
+    - name: "speaker_similarity"
+
+# ==========================================
+# 2. 副语言/自然度编辑 (Paralinguistic)
+# 目标: 成功插入笑声、叹气等副语言，且文本准确
+# ==========================================
+transcription_add_paralinguistic:
+  metrics:
+    - name: "wer"
+      target_text_key: "target_text"
+    - name: "utmos"
+    - name: "clap" # 用于评估加入的叹气/笑声等是否符合 caption 描述
+      target_text_key: "target_audio_caption"
+    - name: "speaker_similarity"
+
+# ==========================================
+# 3. 风格与情感控制 (Style & Emotion)
+# 目标: 改变说话风格/情感，但不改变文本和说话人身份
+# ==========================================
+style_whisper:
+  metrics:
+    - name: "wer"
+      target_text_key: "target_text"
+    - name: "speaker_similarity"
+    - name: "clap" 
+      target_text_key: "target_audio_caption" # Caption 中包含了对 style 的详细描述
+
+style_emotion:
+  metrics:
+    - name: "wer"
+      target_text_key: "target_text"
+    - name: "speaker_similarity"
+    - name: "clap"
+      target_text_key: "target_audio_caption" # Caption 中包含了对 emotion 的详细描述
+
+# ==========================================
+# 4. 音频声学特效 (Audio Effects)
+# 目标: 成功应用特效，文本不变
+# ==========================================
+audio_effect_speed:
+  metrics:
+    - name: "wer"
+      target_text_key: "target_text" # 确保加速/减速没有导致吞字或乱码
+    - name: "clap"
+      target_text_key: "target_audio_caption"
+
+audio_effect_volume:
+  metrics:
+    - name: "wer"
+      target_text_key: "target_text"
+    - name: "clap"
+      target_text_key: "target_audio_caption"
+
+audio_effect_pitch:
+  metrics:
+    - name: "wer"
+      target_text_key: "target_text"
+    - name: "clap"
+      target_text_key: "target_audio_caption"
+
+audio_effect_reverb:
+  metrics:
+    - name: "wer"
+      target_text_key: "target_text"
+    - name: "clap"
+      target_text_key: "target_audio_caption"
+
+audio_effect_dereverb:
+  metrics:
+    - name: "wer"
+      target_text_key: "target_text"
+    - name: "pesq" # 针对去混响任务，PESQ 可以有效衡量语音质量的提升

@@ -1,0 +1,233 @@
+from __future__ import annotations
+
+import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any
+
+from tqdm import tqdm
+
+from .base import coerce_bool, render_template, try_parse_json
+from .base import BaseScorer
+from .clients import build_client
+
+
+def _clamp01(value: float) -> float:
+    if value < 0.0:
+        return 0.0
+    if value > 1.0:
+        return 1.0
+    return value
+
+
+def _require_key(mapping: dict[str, Any], key: str, path: str) -> Any:
+    if key not in mapping:
+        raise KeyError(f"missing required key `{path}.{key}`")
+    return mapping[key]
+
+
+class LLMJudgeCaptionLLMScorer(BaseScorer):
+    def __init__(
+        self,
+        *,
+        name: str,
+        cfg: dict[str, Any],
+        runtime: dict[str, Any],
+        global_config: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(name=name, cfg=cfg, runtime=runtime)
+        global_config = global_config or {}
+        models_cfg = global_config.get("models", {})
+
+        captioner_ref = str(_require_key(self.cfg, "captioner_model_ref", f"scorers.{name}"))
+        judge_ref = str(_require_key(self.cfg, "judge_model_ref", f"scorers.{name}"))
+        
+        if captioner_ref not in models_cfg:
+            raise KeyError(f"captioner_model_ref `{captioner_ref}` not found in models config")
+        if judge_ref not in models_cfg:
+            raise KeyError(f"judge_model_ref `{judge_ref}` not found in models config")
+            
+        self.captioner_client = build_client(models_cfg[captioner_ref])
+        self.judge_client = build_client(models_cfg[judge_ref])
+
+        self.caption_decode_kwargs = dict(self.cfg.get("caption_decode_kwargs", {}))
+        self.judge_decode_kwargs = dict(self.cfg.get("judge_decode_kwargs", {}))
+
+    def _resolve_task(self) -> tuple[str, str, str, str, str, dict[str, Any], dict[str, Any]]:
+        prompts = _require_key(self.task_cfg, "prompts", "tasks.<type>.scorers[]")
+        system_prompt = str(_require_key(prompts, "system", "tasks.<type>.scorers[].prompts"))
+        user_prompt = str(_require_key(prompts, "user", "tasks.<type>.scorers[].prompts"))
+        caption_prompt = str(_require_key(self.task_cfg, "caption_prompt", "tasks.<type>.scorers[]"))
+        audio_a_key = str(_require_key(self.task_cfg, "audio_a_key", "tasks.<type>.scorers[]"))
+        audio_b_key = str(_require_key(self.task_cfg, "audio_b_key", "tasks.<type>.scorers[]"))
+        caption_decode_kwargs: dict[str, Any] = {}
+        judge_decode_kwargs: dict[str, Any] = {}
+        if "caption_decode_kwargs" in self.task_cfg:
+            caption_decode_kwargs = dict(self.task_cfg["caption_decode_kwargs"])
+        if "judge_decode_kwargs" in self.task_cfg:
+            judge_decode_kwargs = dict(self.task_cfg["judge_decode_kwargs"])
+        return (
+            system_prompt,
+            user_prompt,
+            caption_prompt,
+            audio_a_key,
+            audio_b_key,
+            caption_decode_kwargs,
+            judge_decode_kwargs,
+        )
+
+    def _caption_audio(
+        self,
+        *,
+        audio_path: str,
+        sample: dict[str, Any],
+        caption_prompt_template: str,
+        caption_decode_kwargs: dict[str, Any],
+    ) -> str:
+        prompt_context = dict(sample)
+        prompt_context["sample_json"] = json.dumps(sample, ensure_ascii=False)
+        caption_prompt = render_template(caption_prompt_template, prompt_context)
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": caption_prompt},
+                    {"type": "audio_url", "audio_url": {"url": f"file://{audio_path}"}},
+                ],
+            }
+        ]
+        decode = dict(self.caption_decode_kwargs)
+        decode.update(caption_decode_kwargs)
+        response = self.captioner_client.infer(messages=messages, **decode)
+        return str(response).strip()
+
+    def _infer_one(self, sample: dict[str, Any]) -> dict[str, Any]:
+        sample_id = str(sample["sample_id"])
+        (
+            system_tmpl,
+            user_tmpl,
+            caption_prompt_tmpl,
+            audio_a_key,
+            audio_b_key,
+            task_caption_decode_kwargs,
+            task_judge_decode_kwargs,
+        ) = self._resolve_task()
+        
+        audio_a_path = str(sample[audio_a_key])
+        audio_b_path = str(sample[audio_b_key])
+
+        caption_a = self._caption_audio(
+            audio_path=audio_a_path,
+            sample=sample,
+            caption_prompt_template=caption_prompt_tmpl,
+            caption_decode_kwargs=task_caption_decode_kwargs,
+        )
+        caption_b = self._caption_audio(
+            audio_path=audio_b_path,
+            sample=sample,
+            caption_prompt_template=caption_prompt_tmpl,
+            caption_decode_kwargs=task_caption_decode_kwargs,
+        )
+
+        context = dict(sample)
+        context["sample_json"] = json.dumps(sample, ensure_ascii=False)
+        context["caption_a"] = caption_a
+        context["caption_b"] = caption_b
+        
+        judge_messages = [
+            {"role": "system", "content": render_template(system_tmpl, context)},
+            {"role": "user", "content": render_template(user_tmpl, context)},
+        ]
+        judge_decode = dict(self.judge_decode_kwargs)
+        judge_decode.update(task_judge_decode_kwargs)
+        judge_resp = self.judge_client.infer(messages=judge_messages, **judge_decode)
+        judge_raw = str(judge_resp)
+        
+        return {
+            "sample_id": sample_id,
+            "caption_a": caption_a,
+            "caption_b": caption_b,
+            "judge_raw": judge_raw,
+        }
+
+    def run(self, samples: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        if "num_workers" in self.task_cfg:
+            workers = int(self.task_cfg["num_workers"])
+        elif "num_workers" in self.runtime:
+            workers = int(self.runtime["num_workers"])
+        else:
+            workers = 4
+            
+        # Phase 1: Inference
+        inferences: dict[str, dict[str, Any]] = {}
+        errors: dict[str, str] = {}
+        
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+            futures = {ex.submit(self._infer_one, sample): sample for sample in samples}
+            for future in tqdm(as_completed(futures), total=len(futures), desc=f"{self.name} [infer]", leave=False):
+                sample = futures[future]
+                sample_id = str(sample["sample_id"])
+                try:
+                    res = future.result()
+                    inferences[sample_id] = res
+                except Exception as exc:
+                    errors[sample_id] = str(exc)
+
+        # Phase 2: Aggregation / Scoring
+        rows: list[dict[str, Any]] = []
+        for sample in tqdm(samples, desc=f"{self.name} [score]", leave=False):
+            sample_id = str(sample["sample_id"])
+            if sample_id in errors:
+                rows.append(self.make_result(
+                    sample_id=sample_id,
+                    score=None,
+                    valid=False,
+                    error="llm_judge_caption_llm_infer_failed",
+                    reason=errors[sample_id],
+                ))
+                continue
+                
+            res = inferences[sample_id]
+            judge_raw = res["judge_raw"]
+            try:
+                parsed = try_parse_json(judge_raw)
+                if parsed is None:
+                    raise RuntimeError(f"judge did not return valid JSON: {judge_raw}")
+                valid_raw = _require_key(parsed, "valid", "judge_json")
+                valid = coerce_bool(valid_raw)
+                if valid is None:
+                    raise RuntimeError(f"cannot coerce `valid` to bool: {valid_raw}")
+                reason = str(_require_key(parsed, "reason", "judge_json"))
+                if "score" in parsed:
+                    score = _clamp01(float(parsed["score"]))
+                else:
+                    score = 1.0 if valid else 0.0
+                    
+                extra: dict[str, Any] = {
+                    "caption_a": res["caption_a"],
+                    "caption_b": res["caption_b"],
+                    "judge_raw": judge_raw,
+                }
+                for key in self.score_keys:
+                    if key != "score" and key in parsed:
+                        try:
+                            extra[key] = _clamp01(float(parsed[key]))
+                        except (TypeError, ValueError):
+                            pass
+                            
+                rows.append(self.make_result(
+                    sample_id=sample_id,
+                    score=score,
+                    valid=bool(valid),
+                    reason=reason,
+                    extra=extra,
+                ))
+            except Exception as exc:
+                rows.append(self.make_result(
+                    sample_id=sample_id,
+                    score=None,
+                    valid=False,
+                    error="llm_judge_caption_llm_score_failed",
+                    reason=str(exc),
+                ))
+
+        return self.finalize(rows)

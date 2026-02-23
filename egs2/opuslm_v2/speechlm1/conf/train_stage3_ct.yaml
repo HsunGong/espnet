@@ -34,7 +34,7 @@ preprocessor:
 
 data_loading:
     batchfy_method: pack
-    batch_size: 20000
+    batch_size: 12000
     save_loader_state: false
     seed: 7
     num_workers: 6
@@ -42,7 +42,7 @@ data_loading:
 trainer:
     deepspeed_config: conf/ds_acc4_tot500k.json
     freeze_param: [multimodal_io_dict.discrete_audio, multimodal_io_dict.continuous_audio]
-    max_step: 500_000
+    max_step: 420_000
     #inistep: 350_000
     # <- 44k for one epoch
     save_interval: 5000

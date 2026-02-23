@@ -205,6 +205,7 @@ def compute_validity(
         if split1_duration is not None and split1_duration > 0:
             rate = infer_duration / split1_duration
             valid = infer_duration >= 0.5 * split1_duration
+            print("Fallback to split1 duration criterion", valid, rate)
             return valid, rate
         # Cannot determine – mark invalid
         return False, None
@@ -216,7 +217,7 @@ def compute_validity(
     rate = infer_duration / gt_last_duration
 
     if is_split1_type:
-        return rate >= 1.8, rate
+        return rate >= 1.5, rate # split1 is already included
     else:
         return 0.8 <= rate <= 1.5, rate
 
@@ -417,13 +418,14 @@ def process_infer_dir(
 
         dataset_stats[dataset_key] = {
             "valid": valid_count,
+            "is_split1_type": is_split1_type,
             "valid_path": valid_path,
             "total": total_count,
             "corrupt": list(set(corrupt_detected)),
         }
 
     # ---- Summary ----
-    print(f"\n{'Dataset':80s}  {'Valid':>6}  {'Total':>6}  {'Rate':>6}  Corrupt  Valid Path")
+    print(f"\n{'Dataset':80s}  {'Valid':>6}  {'Total':>6}  {'Rate':>6}\tCont.\tCorrupt\tValid Path")
     print("-" * 110)
     for dk, st in sorted(dataset_stats.items()):
         rate_str = (
@@ -431,7 +433,8 @@ def process_infer_dir(
             if st["total"] > 0 else "  N/A"
         )
         corrupt_str = str(len(st["corrupt"])) if st["corrupt"] else "0"
-        print(f"  {dk[:78]:78s}  {st['valid']:>6}  {st['total']:>6}  {rate_str:>6}  {corrupt_str} {st['valid_path']}")
+        is_split1_type_str = "Yes" if st["is_split1_type"] else "No"
+        print(f"  {dk[:78]:78s}  {st['valid']:>6}  {st['total']:>6}  {rate_str:>6}\t{is_split1_type_str}\t{corrupt_str}\t{st['valid_path']}")
         if st["corrupt"]:
             for cid in st["corrupt"][:5]:
                 print(f"      [CORRUPT] {cid}")
