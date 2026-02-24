@@ -362,6 +362,7 @@ class SpeechLMPreprocessor:
             is_last_msg = (msg_idx == len(messages) - 1)
             if (
                 not self.add_generation_prompt
+                and not self.is_train
                 and is_last_msg
                 and self.multimodal_io[this_io].is_discrete
                 and hasattr(self.multimodal_io[this_io], 'delay_interleave')

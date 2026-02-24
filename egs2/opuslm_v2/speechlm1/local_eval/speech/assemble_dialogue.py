@@ -48,50 +48,35 @@ MODE_CHOICES = [
 
 def build_messages(record: dict, mode: str) -> list | None:
     """Return the messages list for one record + mode, or None to skip."""
-    source_audio = str(record.get("audio_path") or "")
-    target_audio = str(record.get("target_audio_path") or "")
-
-    source_text = str(record.get("text") or "")
-    edit_prompt = str(record.get("edit_prompt") or "")
-
-    if not edit_prompt:
-        print("ERROR: mode requires edit prompt but it's missing; skipping record.")
-        return None
-    if not source_text:
-        print("ERROR: mode requires source text but it's missing; skipping record.")
-        return None
-
-    concat_caption = f"Transcription: {source_text}\nEdit Prompt: {edit_prompt}"
-
     messages = None
     last_audio = None
-    
+
+    source_audio_caption = record["audio_caption"]
+    source_audio_path = record["audio_path"]
+    target_audio_caption = record["target_audio_caption"]
+    target_audio_path = record["target_audio_path"]
+
+    concat_caption = f"Audio Clip1: {source_audio_caption}\nAudio Clip2: {target_audio_caption}"
+
     if mode == "cat2split1":
-        messages = [["user", "text", concat_caption]]
-        last_audio = target_audio
+        messages = [["user", "text", concat_caption],["assistant", "audio", source_audio_path]]
 
     elif mode == "t2a_t2a":
         messages = [
-            ["user", "text", source_text],
-            ["assistant", "audio", source_audio],
-            ["user", "text", edit_prompt],
+            ["user", "text", source_audio_caption],
+            ["assistant", "audio", source_audio_path],
+            ["user", "text", target_audio_caption],
         ]
-        last_audio = target_audio
-
     elif mode == "a2t_t2a":
         messages = [
-            ["user", "audio", source_audio],
-            ["assistant", "text", source_text],
-            ["user", "text", edit_prompt],
+            ["user", "audio", source_audio_path],
+            ["assistant", "text", source_audio_caption],
+            ["user", "text", target_audio_caption],
         ]
-        last_audio = target_audio
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
-    if last_audio and not os.path.exists(last_audio):
-        return messages
-    else:
-        return messages + [["assistant", "audio", last_audio]]
+    return messages
 
 # ---------------------------------------------------------------------------
 # Main
@@ -140,7 +125,7 @@ def main() -> None:
         records = records[: args.k]
 
     for mode in modes:
-        output_jsonl = args.output_dir / f"dialogue.{mode}.{basename}.jsonl"
+        output_jsonl = args.output_dir / f"dialogue.{basename}.{mode}.jsonl"
         print(
             f"[assemble_dialogue] mode={mode} input = {args.input_jsonl} output = {output_jsonl} k={args.k}"
         )
