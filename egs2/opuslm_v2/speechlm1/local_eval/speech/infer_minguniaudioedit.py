@@ -45,6 +45,7 @@ class MingAudio:
             model_path,
             torch_dtype=torch.bfloat16,
             trust_remote_code=True,
+            attn_implementation="flash_attention_2",
         ).to(self.device)
 
         if use_grouped_gemm and not self.model.config.llm_config.use_grouped_gemm:
@@ -220,17 +221,19 @@ def process_jsonl():
                 ]
 
                 try:
-                    # 推理
-                    response_speech, response_text = model.speech_edit(
-                        messages=messages, 
-                        output_wav_path=save_audio_path
-                    )
+                    if os.path.exists(save_audio_path):
+                        logger.info(f"[{utt_id}] Output audio already exists. Skipping inference.")
+                    else:
+                        response_speech, response_text = model.speech_edit(
+                            messages=messages, 
+                            output_wav_path=save_audio_path
+                        )
+                        logger.info(f"[{utt_id}] Successfully edited. Model Output Text: {response_text}")
                     
                     # 写入 SCP（格式：id 绝对路径）
                     fscp.write(f"{utt_id}\t{save_audio_path}\n")
                     fscp.flush()
                     
-                    logger.info(f"[{utt_id}] Successfully edited. Model Output Text: {response_text}")
                     
                 except Exception as e:
                     logger.error(f"Failed to process {utt_id}: {e}")

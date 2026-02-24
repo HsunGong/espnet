@@ -4,16 +4,9 @@ import argparse
 from pathlib import Path
 from typing import Any
 import json
-from tqdm import tqdm
-
-import json
 import os
 import re
-from pathlib import Path
-from typing import Any
-
-import sys
-sys.path.append(str(Path(__file__).parent))  # 确保能 import local_eval.eval.scorers.registry
+from tqdm import tqdm
 
 from joblib import Parallel, delayed
 
@@ -25,7 +18,7 @@ from .scorers.volume_loudness import VolumeLoudnessScorer
 from .scorers.pitch_shift import PitchShiftScorer
 from .scorers.pseudo_mos import PseudoMOSScorer
 from .scorers.emotion_modelscope import EmotionModelscopeScorer
-from .scorers.speaker_similarity_3d import SpeakerSimilarity3DScorer
+from .scorers.speaker_similarity_wespeaker import SpeakerSimilarityWespeakerScorer
 
 SCORER_CLASSES = {
     "asr_wer": ASRWERScorer,
@@ -36,7 +29,7 @@ SCORER_CLASSES = {
     "pitch_shift": PitchShiftScorer,
     "pseudo_mos": PseudoMOSScorer,
     "emotion_modelscope": EmotionModelscopeScorer,
-    "speaker_similarity_3d": SpeakerSimilarity3DScorer,
+    "speaker_similarity_wespeaker": SpeakerSimilarityWespeakerScorer,
 }
 
 def run_scorer(scorer, task_cfg, samples):
@@ -44,14 +37,12 @@ def run_scorer(scorer, task_cfg, samples):
     rows, summary = scorer.run(samples)
     return scorer.name, rows, summary
 
-
-
 DEFAULT_TASK_SCORERS: dict[str, list[str]] = {
-    "transcription_ins": ["asr_wer", "speaker_similarity_3d"],
-    "transcription_del": ["asr_wer", "speaker_similarity_3d"],
-    "transcription_sub": ["asr_wer", "speaker_similarity_3d"],
-    "transcription_replace_sentence": ["asr_wer", "speaker_similarity_3d"],
-    "transcription_add_paralinguistic": ["asr_wer", "speaker_similarity_3d"],
+    "transcription_ins": ["asr_wer", "speaker_similarity_wespeaker"],
+    "transcription_del": ["asr_wer", "speaker_similarity_wespeaker"],
+    "transcription_sub": ["asr_wer", "speaker_similarity_wespeaker"],
+    "transcription_replace_sentence": ["asr_wer", "speaker_similarity_wespeaker"],
+    "transcription_add_paralinguistic": ["asr_wer", "speaker_similarity_wespeaker"],
     "style_whisper": ["llm_judge_caption_llm", "asr_wer"],
     "style_emotion": ["llm_judge_caption_llm", "asr_wer"],
     "audio_effect_speed": ["speed_duration"],
@@ -64,13 +55,10 @@ DEFAULT_TASK_SCORERS: dict[str, list[str]] = {
 # region: utils
 _ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
-
 def _expand_env_in_string(value: str) -> str:
     def repl(match: re.Match[str]) -> str:
         return os.environ.get(match.group(1), "")
-
     return _ENV_PATTERN.sub(repl, value)
-
 
 def _expand_env(value: Any) -> Any:
     if isinstance(value, dict):
@@ -81,16 +69,13 @@ def _expand_env(value: Any) -> Any:
         return _expand_env_in_string(value)
     return value
 
-
 def load_config(path: str | Path) -> dict[str, Any]:
     import yaml
-
     with Path(path).open("r", encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
     if not isinstance(raw, dict):
         raise ValueError(f"Config root must be a mapping: {path}")
     return _expand_env(raw)
-
 
 def infer_sample_id(record: dict[str, Any]) -> str:
     if "id" in record and record["id"]:
@@ -98,8 +83,6 @@ def infer_sample_id(record: dict[str, Any]) -> str:
     if "utt_id" in record and record["utt_id"]:
         return str(record["utt_id"])
     return ""
-
-
 
 def load_metadata_by_type(metadata_input: str | Path) -> dict[str, dict[str, dict[str, Any]]]:
     path = Path(metadata_input)
@@ -126,7 +109,6 @@ def load_metadata_by_type(metadata_input: str | Path) -> dict[str, dict[str, dic
             by_type.setdefault(task_type, {})[sample_id] = row
     return by_type
 
-
 def load_scp_by_type(data_dir: str | Path) -> dict[str, dict[str, str]]:
     data_path = Path(data_dir)
     if not data_path.is_dir():
@@ -137,7 +119,6 @@ def load_scp_by_type(data_dir: str | Path) -> dict[str, dict[str, str]]:
         task_type = scp_file.stem
         result[task_type] = read_scp(scp_file)
     return result
-
 
 def build_samples(
     task_type: str,
@@ -164,7 +145,6 @@ def build_samples(
         "matched_count": len(samples),
     }
     return samples, stats
-
 
 def print_task_summary(task_type: str, summaries: dict[str, dict[str, Any]], output_path: str) -> None:
     print(f"\n[{task_type}] -> {output_path}")
@@ -198,7 +178,6 @@ def print_task_summary(task_type: str, summaries: dict[str, dict[str, Any]], out
                         items.append(f"{k}={float(v):.3f}")
                 print(f"    submetrics: {' '.join(items)}")
 
-
 def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     with Path(path).open("r", encoding="utf-8") as f:
@@ -209,14 +188,12 @@ def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
             rows.append(json.loads(line))
     return rows
 
-
 def write_jsonl(path: str | Path, rows: list[dict[str, Any]]) -> None:
     out_path = Path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8") as f:
         for row in rows:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
-
 
 def read_scp(path: str | Path) -> dict[str, str]:
     mapping: dict[str, str] = {}
@@ -231,7 +208,6 @@ def read_scp(path: str | Path) -> dict[str, str]:
             utt_id, wav_path = parts
             mapping[utt_id] = wav_path
     return mapping
-
 
 def normalize_scorer_entries(raw: Any) -> list[dict[str, Any]]:
     if not raw:
@@ -248,7 +224,6 @@ def normalize_scorer_entries(raw: Any) -> list[dict[str, Any]]:
             raise ValueError(f"Invalid scorer entry: {item}")
     return entries
 
-
 def get_task_configs(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
     if "tasks" not in config:
         return {}
@@ -258,7 +233,6 @@ def get_task_configs(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
     if not isinstance(tasks_cfg, dict):
         raise ValueError("tasks must be a mapping")
     return {str(k): dict(v or {}) for k, v in tasks_cfg.items()}
-
 
 def build_default_task_configs(
     metadata_by_type: dict[str, dict[str, dict[str, Any]]],
@@ -274,7 +248,6 @@ def build_default_task_configs(
         if scorers:
             task_cfg[task_type] = {"scorers": [{"name": name} for name in scorers]}
     return task_cfg
-
 
 def collect_used_scorers(tasks_cfg: dict[str, dict[str, Any]]) -> list[str]:
     names: list[str] = []
@@ -334,14 +307,23 @@ def main() -> None:
     output_dir = Path(args.output_dir) if args.output_dir else Path(args.data_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    model_pool = initialize_model_pool(config)
-    print(f"Initialized models: {', '.join(sorted(model_pool.keys()))}")
-
-    registry = ScorerRegistry(config=config, model_pool=model_pool)
     used_scorers = collect_used_scorers(tasks_cfg)
+    scorers_dict = {}
     for scorer_name in used_scorers:
-        registry.get(scorer_name)
-    print(f"Initialized scorers: {', '.join(sorted(used_scorers))}")
+        print(f"Initializing scorer: {scorer_name}")
+        scorer_cls = SCORER_CLASSES[scorer_name]
+        scorer_cfg = config.get("scorers", {}).get(scorer_name, {})
+        scorer_kwargs = dict(scorer_cfg)
+
+        if "num_workers" in runtime_cfg:
+            scorer_kwargs["num_workers"] = runtime_cfg["num_workers"]
+        if "use_gpu" in runtime_cfg:
+            scorer_kwargs["use_gpu"] = runtime_cfg["use_gpu"]
+
+        scorer_kwargs["global_models"] = config.get("models", {})
+        scorers_dict[scorer_name] = scorer_cls(name=scorer_name, **scorer_kwargs)
+        print(f"Initialized scorer: {scorer_name} with args: {scorer_kwargs}")
+
 
     type_list = list(tasks_cfg.keys())
     print(f"Configured tasks: {', '.join(type_list)}")
@@ -385,12 +367,12 @@ def main() -> None:
             }
 
         task_summaries: dict[str, dict[str, Any]] = {}
+        
         scorer_instances = []
         for scorer_entry in scorer_entries:
             scorer_instances.append((scorers_dict[scorer_entry["name"]], scorer_entry))
 
-        workers = int(runtime_cfg.get("num_workers", 4))
-        results = Parallel(n_jobs=max(1, workers), prefer="threads")(
+        results = Parallel(n_jobs=runtime_cfg.get("num_workers", 4), prefer="threads")(
             delayed(run_scorer)(inst, entry, samples)
             for inst, entry in scorer_instances
         )

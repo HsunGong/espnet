@@ -13,10 +13,8 @@ def safe_mean(values: list[float]) -> float | None:
 
 def summarize_metric_rows(
     rows: list[dict[str, Any]],
-    score_keys: list[str] | None = None,
+    score_keys: list[str] = ["score"],
 ) -> dict[str, Any]:
-    if score_keys is None:
-        score_keys = ["score"]
 
     key_scores: dict[str, list[float]] = {k: [] for k in score_keys}
     errors = 0
@@ -111,11 +109,8 @@ def extract_first_float(value: Any) -> float | None:
 class BaseScorer(ABC):
     score_keys = ["score"]
 
-    def __init__(self, *, name: str, cfg: dict[str, Any], runtime: dict[str, Any], global_config: dict[str, Any] | None = None) -> None:
+    def __init__(self, *, name: str, **kwargs: Any) -> None:
         self.name = name
-        self.cfg = cfg or {}
-        self.runtime = runtime or {}
-        self.global_config = global_config or {}
         self.task_cfg: dict[str, Any] = {}
 
     def configure_task(self, task_cfg: dict[str, Any] | None) -> None:

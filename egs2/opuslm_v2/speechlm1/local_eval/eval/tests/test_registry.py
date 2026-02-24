@@ -12,7 +12,7 @@ class RegistryTests(unittest.TestCase):
             "llm_judge_gemini",
             "pseudo_mos",
             "emotion_modelscope",
-            "speaker_similarity_3d",
+            "speaker_similarity_wespeaker",
         ):
             self.assertIn(name, SCORER_SPECS)
 

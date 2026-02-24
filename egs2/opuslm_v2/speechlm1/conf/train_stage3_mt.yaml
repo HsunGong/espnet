@@ -42,7 +42,7 @@ data_loading:
 trainer:
     deepspeed_config: conf/ds_acc4_tot500k.json
     freeze_param: [multimodal_io_dict.discrete_audio, multimodal_io_dict.continuous_audio]
-    max_step: 420_000
+    max_step: 370_000 # for resume 360000 step; but i think at most 380_000 is enough
     #inistep: 350_000
     # <- 44k for one epoch
     save_interval: 5000

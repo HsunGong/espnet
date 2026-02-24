@@ -24,17 +24,21 @@ class PitchShiftScorer(BaseScorer):
     @staticmethod
     def _semitone_diff(f0_a: float, f0_b: float) -> float:
         if f0_a <= 0 or f0_b <= 0:
-            raise ValueError("f0 must be positive")
-        return 12.0 * np.log2(f0_b / f0_a)
+            return 0.0
+        return float(12.0 * np.log2(f0_b / f0_a))
 
-    def _extract_pitch_shift(self, sample: dict[str, Any]) -> float | None:
+    def __init__(self, *, name: str, semitone_tolerance: float = 1.0, **kwargs: Any) -> None:
+        super().__init__(name=name)
+        self.semitone_tolerance = semitone_tolerance
+
+    def _extract_semitones(self, sample: dict[str, Any]) -> float | None:
         candidates = []
         edit_kwargs = sample.get("edit_kwargs")
         if isinstance(edit_kwargs, dict):
-            for key in ("pitch", "semitone", "effect_param", "param", "value"):
+            for key in ("n_steps", "steps", "semitones", "effect_param", "param", "value"):
                 if key in edit_kwargs:
                     candidates.append(edit_kwargs[key])
-        for key in ("effect_param", "edit_prompt", "edit_operation", "pitch_shift", "param"):
+        for key in ("effect_param", "edit_prompt", "edit_operation", "semitones", "param"):
             if key in sample:
                 candidates.append(sample[key])
         for value in candidates:
@@ -43,44 +47,38 @@ class PitchShiftScorer(BaseScorer):
                 return parsed
         return None
 
-    def _median_f0(self, audio_path: str) -> float:
-        y, sr = librosa.load(audio_path, sr=None, mono=True)
-        f0, _, _ = librosa.pyin(
-            y,
-            fmin=librosa.note_to_hz("C2"),
-            fmax=librosa.note_to_hz("C7"),
-        )
-        voiced = f0[~np.isnan(f0)]
-        if voiced.size == 0:
-            raise RuntimeError("no voiced frame detected")
-        return float(np.median(voiced))
+    def _get_f0_median(self, audio_path: str) -> float:
+        wav, sr = librosa.load(audio_path, sr=None, mono=True)
+        f0, _, _ = librosa.pyin(wav, sr=sr, fmin=50, fmax=500)
+        valid_f0 = f0[~np.isnan(f0)]
+        if len(valid_f0) == 0:
+            raise RuntimeError(f"no valid F0 found in {audio_path}")
+        return float(np.median(valid_f0))
 
     def run(self, samples: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        tol = float(self.cfg.get("semitone_tolerance", 1.5))
+        tol_st = self.semitone_tolerance
 
-        # ------------------------------------------------------------------
-        # Phase 1: extract F0 from all audio files
-        # ------------------------------------------------------------------
+        # Phase 1: extract F0 for all samples
         pending: list[dict[str, Any]] = []
         rows: list[dict[str, Any]] = []
 
-        for sample in tqdm(samples, desc=f"{self.name} [f0]", leave=False):
+        for sample in tqdm(samples, desc=f"{self.name} [measure]", leave=False):
             sample_id = str(sample["sample_id"])
             try:
-                expected_shift = self._extract_pitch_shift(sample)
-                if expected_shift is None:
-                    raise RuntimeError("unable to parse pitch shift")
+                target_steps = self._extract_semitones(sample)
+                if target_steps is None:
+                    raise RuntimeError("unable to parse semitone steps")
                 orig_audio = str(sample.get("audio_path") or "")
                 pred_audio = str(sample.get("eval_audio_path") or "")
                 if not orig_audio or not pred_audio:
                     raise RuntimeError("missing audio paths")
-                f0_orig = self._median_f0(orig_audio)
-                f0_pred = self._median_f0(pred_audio)
+                orig_f0 = self._get_f0_median(orig_audio)
+                pred_f0 = self._get_f0_median(pred_audio)
                 pending.append({
                     "sample_id": sample_id,
-                    "expected_shift": expected_shift,
-                    "f0_orig": f0_orig,
-                    "f0_pred": f0_pred,
+                    "target_steps": target_steps,
+                    "orig_f0": orig_f0,
+                    "pred_f0": pred_f0,
                 })
             except Exception as exc:
                 rows.append(
@@ -93,30 +91,28 @@ class PitchShiftScorer(BaseScorer):
                     )
                 )
 
-        # ------------------------------------------------------------------
         # Phase 2: compute scores
-        # ------------------------------------------------------------------
         for item in tqdm(pending, desc=f"{self.name} [score]", leave=False):
             sample_id = item["sample_id"]
             try:
-                f0_orig = item["f0_orig"]
-                f0_pred = item["f0_pred"]
-                expected_shift = item["expected_shift"]
-                observed_shift = self._semitone_diff(f0_orig, f0_pred)
-                err = abs(observed_shift - expected_shift)
-                score = self._clamp01(1.0 - err / max(tol, 1e-6))
+                target_steps = item["target_steps"]
+                orig_f0 = item["orig_f0"]
+                pred_f0 = item["pred_f0"]
+                observed_steps = self._semitone_diff(orig_f0, pred_f0)
+                err = abs(observed_steps - target_steps)
+                score = self._clamp01(1.0 - err / max(tol_st, 1e-6))
                 rows.append(
                     self.make_result(
                         sample_id=sample_id,
                         score=score,
                         valid=True,
-                        reason=f"semitone_err={err:.3f}",
+                        reason=f"semitone_err={err:.2f}",
                         extra={
-                            "expected_shift": expected_shift,
-                            "observed_shift": observed_shift,
+                            "target_semitones": target_steps,
+                            "observed_semitones": observed_steps,
                             "semitone_err": err,
-                            "f0_orig": f0_orig,
-                            "f0_pred": f0_pred,
+                            "f0_orig": orig_f0,
+                            "f0_pred": pred_f0,
                         },
                     )
                 )

@@ -88,10 +88,12 @@ def preprocess_and_sample(input_jsonl, output_jsonl, k):
                 data["id"] = data.pop("utt_id") #<- re-name
                 if duration < 3.0 or len(text.split()) < 3:
                     continue
+                if duration > 10.0:
+                    continue
                 buckets[int(duration)].append(line)
             except Exception:
                 continue
-    
+
     total_available = sum(len(b) for b in buckets.values())
     if total_available <= k:
         sampled_lines = [line for b in buckets.values() for line in b]

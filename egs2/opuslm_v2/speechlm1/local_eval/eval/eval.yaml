@@ -44,23 +44,17 @@ models:
 
 scorers:
   asr_wer:
-    whisper:
-      model_name: large-v3
-      device: cuda
-      compute_type: float16
-      batch_size: 16
-      language: en
+    model_name: openai/whisper-large-v3
+    device: cuda
+    compute_type: bfloat16
+    batch_size: 16
+    language: en
 
-  speaker_similarity_3d:
-    model_id: "damo/speech_eres2net_sv_en_voxceleb_16k"
-    local_model_dir: "pretrained"
-    sample_rate: 16000
-    feat_dim: 80
-    device: "cuda:0"
-    prompt_audio_key: "audio_path"
+  speaker_similarity_wespeaker:
+    model_id: "english"
+    device: "cuda"
     reference_audio_key: "audio_path"
     hypothesis_audio_key: "eval_audio_path"
-    score_mode: "relative_to_ref"
 
   llm_judge_gemini:
     model_ref: gemini_judge
@@ -83,18 +77,18 @@ scorers:
 
   pseudo_mos:
     use_gpu: true
-    cache_dir: "versa_cache"
-    predictor_types: ["utmosv2", "dnsmos"]
+    cache_dir: "~/.versa_cache"
+    predictor_types: ["utmos", "dnsmos"]
     predictor_args:
       dnsmos:
         fs: 16000
-    aggregate_keys: ["utmosv2", "dns_overall", "dns_p808"]
+    aggregate_keys: ["utmos", "dns_overall", "dns_p808"]
     aggregate_weights:
-      utmosv2: 0.5
+      utmos: 0.5
       dns_overall: 0.3
       dns_p808: 0.2
     metric_bounds:
-      utmosv2: [1.0, 5.0]
+      utmos: [1.0, 5.0]
       dns_overall: [1.0, 5.0]
       dns_p808: [1.0, 5.0]
     normalize_aggregate: true
@@ -102,17 +96,15 @@ scorers:
 
   emotion_modelscope:
     model: "iic/emotion2vec_plus_large"
-    audio_sr: 16000
-    labels: ["angry", "disgusted", "fearful", "happy", "neutral", "other", "sad", "surprised", "unk"]
-    label_field: "emotion_label"
-    level_field: "emotion_level"
+    gen_kwargs:
+      batch_size: 32
 
 tasks:
   # transcription_*: only WER + SPK
   transcription_ins:
     scorers:
       - name: asr_wer
-      - name: speaker_similarity_3d
+      - name: speaker_similarity_wespeaker
         prompt_audio_key: audio_path
         reference_audio_key: audio_path
         hypothesis_audio_key: eval_audio_path
@@ -121,7 +113,7 @@ tasks:
   transcription_del:
     scorers:
       - name: asr_wer
-      - name: speaker_similarity_3d
+      - name: speaker_similarity_wespeaker
         prompt_audio_key: audio_path
         reference_audio_key: audio_path
         hypothesis_audio_key: eval_audio_path
@@ -130,7 +122,7 @@ tasks:
   transcription_sub:
     scorers:
       - name: asr_wer
-      - name: speaker_similarity_3d
+      - name: speaker_similarity_wespeaker
         prompt_audio_key: audio_path
         reference_audio_key: audio_path
         hypothesis_audio_key: eval_audio_path
@@ -139,7 +131,7 @@ tasks:
   transcription_replace_sentence:
     scorers:
       - name: asr_wer
-      - name: speaker_similarity_3d
+      - name: speaker_similarity_wespeaker
         prompt_audio_key: audio_path
         reference_audio_key: audio_path
         hypothesis_audio_key: eval_audio_path
@@ -148,7 +140,7 @@ tasks:
   transcription_add_paralinguistic:
     scorers:
       - name: asr_wer
-      - name: speaker_similarity_3d
+      - name: speaker_similarity_wespeaker
         prompt_audio_key: audio_path
         reference_audio_key: audio_path
         hypothesis_audio_key: eval_audio_path

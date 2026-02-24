@@ -10,11 +10,14 @@ onnxruntime
 # Emotion scorer
 modelscope
 scikit-learn
+addict
 
 # 3D-Speaker scorer
 torchaudio>=2.1
-speakerlab
-kaldiio
+# speakerlab
+# kaldiio
+git+https://github.com/wenet-e2e/wespeaker.git
+peft
 
 PyYAML>=6.0
 Jinja2>=3.1
@@ -25,5 +28,5 @@ soundfile>=0.12
 librosa>=0.10
 pyloudnorm>=0.1.1
 jiwer>=3.0
-openai-whisper>=20231117
 
+transformers

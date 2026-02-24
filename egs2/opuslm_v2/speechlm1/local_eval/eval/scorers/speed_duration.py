@@ -20,6 +20,10 @@ class SpeedDurationScorer(BaseScorer):
             return 1.0
         return value
 
+    def __init__(self, *, name: str, relative_tolerance: float = 0.15, **kwargs: Any) -> None:
+        super().__init__(name=name)
+        self.relative_tolerance = relative_tolerance
+
     def _extract_speed_factor(self, sample: dict[str, Any]) -> float | None:
         candidates = []
         edit_kwargs = sample.get("edit_kwargs")
@@ -43,11 +47,9 @@ class SpeedDurationScorer(BaseScorer):
         return float(info.frames / info.samplerate)
 
     def run(self, samples: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        tol = float(self.cfg.get("relative_tolerance", 0.15))
+        tol = self.relative_tolerance
 
-        # ------------------------------------------------------------------
         # Phase 1: read durations for all samples
-        # ------------------------------------------------------------------
         pending: list[dict[str, Any]] = []
         rows: list[dict[str, Any]] = []
 
@@ -78,9 +80,7 @@ class SpeedDurationScorer(BaseScorer):
                     )
                 )
 
-        # ------------------------------------------------------------------
         # Phase 2: compute scores
-        # ------------------------------------------------------------------
         for item in tqdm(pending, desc=f"{self.name} [score]", leave=False):
             sample_id = item["sample_id"]
             try:

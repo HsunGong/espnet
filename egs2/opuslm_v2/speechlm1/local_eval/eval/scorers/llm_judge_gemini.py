@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import base64
 import json
+import mimetypes
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
+import requests
 from tqdm import tqdm
 
 from .base import coerce_bool, render_template, try_parse_json
 from .base import BaseScorer
-from .clients import build_client
 
 
 def _clamp01(value: float) -> float:
@@ -30,21 +32,22 @@ class LLMJudgeGeminiScorer(BaseScorer):
         self,
         *,
         name: str,
-        cfg: dict[str, Any],
-        runtime: dict[str, Any],
-        global_config: dict[str, Any] | None = None,
+        model_ref: str = "",
+        global_models: dict[str, Any] | None = None,
+        decode_kwargs: dict[str, Any] | None = None,
+        num_workers: int = 4,
+        **kwargs: Any,
     ) -> None:
-        super().__init__(name=name, cfg=cfg, runtime=runtime)
-        global_config = global_config or {}
-        models_cfg = global_config.get("models", {})
+        super().__init__(name=name)
+        self.num_workers = num_workers
+        self.decode_kwargs = dict(decode_kwargs or {})
         
-        model_ref = str(_require_key(self.cfg, "model_ref", f"scorers.{name}"))
-        if model_ref not in models_cfg:
-            raise KeyError(f"model_ref `{model_ref}` not found in models config")
-            
-        model_cfg = models_cfg[model_ref]
-        self.client = build_client(model_cfg)
-        self.decode_kwargs = dict(self.cfg.get("decode_kwargs", {}))
+        global_models = global_models or {}
+        self.model_cfg = dict(global_models.get(model_ref, {}))
+        
+        provider = str(self.model_cfg.get("provider", ""))
+        if provider != "gemini":
+            raise ValueError(f"expected provider 'gemini', got '{provider}'")
 
     def _resolve_task(self) -> tuple[str, str, str, str, dict[str, Any]]:
         prompts = _require_key(self.task_cfg, "prompts", "tasks.<type>.scorers[]")
@@ -68,24 +71,65 @@ class LLMJudgeGeminiScorer(BaseScorer):
         user_prompt = render_template(user_tmpl, context)
         system_prompt = render_template(system_tmpl, context)
 
-        decode = dict(self.decode_kwargs)
+        decode = dict(self.model_cfg.get("decode_kwargs", {}))
+        decode.update(self.decode_kwargs)
         decode.update(task_decode_kwargs)
         
-        raw_response = self.client.infer(
-            audio_paths=[audio_a_path, audio_b_path],
-            user_prompt=user_prompt,
-            system_prompt=system_prompt,
-            **decode,
+        api_key = self.model_cfg.get("api_key", "")
+        base_url = self.model_cfg.get("base_url", "")
+        model = self.model_cfg.get("model", "")
+        headers = dict(self.model_cfg.get("headers", {}))
+        
+        if api_key and "Authorization" not in headers:
+            headers["Authorization"] = f"Bearer {api_key}"
+        if "Content-Type" not in headers:
+            headers["Content-Type"] = "application/json"
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": [{"type": "text", "text": system_prompt}]})
+            
+        user_content: list[dict[str, Any]] = [{"type": "text", "text": user_prompt}]
+        for audio_path in [audio_a_path, audio_b_path]:
+            mime, _ = mimetypes.guess_type(audio_path)
+            mime = mime or "audio/wav"
+            with open(audio_path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("utf-8")
+            user_content.append({
+                "type": "input_audio",
+                "input_audio": {"format": mime, "data": b64},
+            })
+        messages.append({"role": "user", "content": user_content})
+
+        payload = {"model": model, "messages": messages, "stream": False}
+        payload.update(decode)
+
+        resp = requests.post(
+            base_url,
+            headers=headers,
+            json=payload,
+            timeout=self.model_cfg.get("timeout_sec", 60),
         )
+        resp.raise_for_status()
+        data = resp.json()
+        
+        raw_response = ""
+        if isinstance(data, dict):
+            if "choices" in data and isinstance(data["choices"], list) and data["choices"]:
+                first = data["choices"][0]
+                if isinstance(first, dict) and "message" in first and isinstance(first["message"], dict):
+                    raw_response = str(first["message"].get("content", ""))
+            elif "content" in data:
+                raw_response = str(data["content"])
+            elif "text" in data:
+                raw_response = str(data["text"])
+        if not raw_response:
+            raw_response = json.dumps(data, ensure_ascii=False)
+
         return {"sample_id": sample_id, "raw_response": raw_response}
 
     def run(self, samples: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        if "num_workers" in self.task_cfg:
-            workers = int(self.task_cfg["num_workers"])
-        elif "num_workers" in self.runtime:
-            workers = int(self.runtime["num_workers"])
-        else:
-            workers = 4
+        workers = int(self.task_cfg.get("num_workers", self.num_workers))
             
         # Phase 1: Inference
         inferences: dict[str, str] = {}

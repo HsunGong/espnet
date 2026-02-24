@@ -20,7 +20,8 @@ DEFAULT_MOS_BOUNDS: dict[str, tuple[float, float]] = {
     "singmos_v1": (1.0, 5.0),
     "singmos_pro": (1.0, 5.0),
 }
-
+# https://github.com/inclusionAI/Ming-Freeform-Audio-Edit/blob/main/eval_scripts/pyscripts/calculate_dnsmos_metrics.py
+# https://github.com/wavlab-speech/versa/blob/main/versa/utterance_metrics/pseudo_mos.py
 
 def _stft_for_dnsmos_pro(
     samples: np.ndarray,
@@ -47,12 +48,40 @@ class PseudoMOSScorer(BaseScorer):
     - singmos_v1 / singmos_pro
     - dnsmos_pro_{variant}
     """
-    # Score keys are dynamic (depend on predictor_types); override in configure_task
-    # or set to cover common sub-metrics.
     score_keys = ["score"]
 
-    def __init__(self, *, name: str, cfg: dict[str, Any], runtime: dict[str, Any], global_config: dict[str, Any] | None = None) -> None:
-        super().__init__(name=name, cfg=cfg, runtime=runtime, global_config=global_config)
+    def __init__(
+        self,
+        *,
+        name: str,
+        use_gpu: bool = False,
+        cache_dir: str = "versa_cache",
+        predictor_types: list[str] | None = None,
+        predictor_args: dict[str, Any] | None = None,
+        aggregate_keys: list[str] | None = None,
+        aggregate_weights: dict[str, float] | None = None,
+        metric_bounds: dict[str, list[float]] | None = None,
+        normalize_aggregate: bool = True,
+        allow_download: bool = False,
+        utmos_hub_repo: str = "ftshijt/SpeechMOS:main",
+        utmos_hub_entry: str = "utmos22_strong",
+        singmos_hub_repo: str = "South-Twilight/SingMOS:v1.1.1",
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(name=name)
+        self.use_gpu = use_gpu
+        self.cache_dir = cache_dir
+        self.predictor_types_default = predictor_types or ["utmosv2"]
+        self.predictor_args_default = predictor_args or {}
+        self.aggregate_keys_default = aggregate_keys
+        self.aggregate_weights_default = aggregate_weights or {}
+        self.metric_bounds = metric_bounds or {}
+        self.normalize_aggregate = normalize_aggregate
+        self.allow_download = allow_download
+        self.utmos_hub_repo = utmos_hub_repo
+        self.utmos_hub_entry = utmos_hub_entry
+        self.singmos_hub_repo = singmos_hub_repo
+        
         self.predictor_dict: dict[str, Any] = {}
         self.predictor_fs: dict[str, int] = {}
         self.device = "cpu"
@@ -63,57 +92,32 @@ class PseudoMOSScorer(BaseScorer):
         self._setup_predictors()
 
     def _predictor_types(self) -> list[str]:
-        return list(self.task_cfg.get("predictor_types") or self.cfg.get("predictor_types") or ["utmosv2"])
+        return list(self.task_cfg.get("predictor_types") or self.predictor_types_default)
 
     def _predictor_args(self) -> dict[str, Any]:
-        return dict(self.task_cfg.get("predictor_args") or self.cfg.get("predictor_args") or {})
+        return dict(self.task_cfg.get("predictor_args") or self.predictor_args_default)
 
     def _setup_predictors(self) -> None:
-        if self._initialized:
-            return
-        try:
-            import torch
-            import librosa
-        except Exception as exc:  # pragma: no cover - runtime dependency
-            raise RuntimeError(f"missing pseudo_mos dependency: {exc}") from exc
-
+        import torch
+        import librosa
         self._torch = torch
         self._librosa = librosa
 
-        use_gpu = bool(self.cfg.get("use_gpu", self.runtime.get("use_gpu", False)))
-        self.device = "cuda" if use_gpu and torch.cuda.is_available() else "cpu"
+        self.device = "cuda" if self.use_gpu and torch.cuda.is_available() else "cpu"
 
         predictor_types = self._predictor_types()
         predictor_args = self._predictor_args()
-        cache_dir = str(self.cfg.get("cache_dir", "versa_cache"))
-        Path(cache_dir).mkdir(parents=True, exist_ok=True)
+        Path(self.cache_dir).mkdir(parents=True, exist_ok=True)
 
         if "utmos" in predictor_types:
-            torch.hub.set_dir(cache_dir)
-            utmos_repo = str(self.cfg.get("utmos_hub_repo", "ftshijt/SpeechMOS:main"))
-            utmos_entry = str(self.cfg.get("utmos_hub_entry", "utmos22_strong"))
-            utmos = torch.hub.load(utmos_repo, utmos_entry).to(self.device)
+            torch.hub.set_dir(self.cache_dir)
+            utmos = torch.hub.load(self.utmos_hub_repo, self.utmos_hub_entry).to(self.device)
             self.predictor_dict["utmos"] = utmos.float()
             self.predictor_fs["utmos"] = 16000
 
-        if "utmosv2" in predictor_types:
-            try:
-                import utmosv2
-                from utmosv2.dataset.multi_spec import process_audio_only_versa
-            except Exception as exc:  # pragma: no cover - runtime dependency
-                raise RuntimeError(f"utmosv2 is not installed: {exc}") from exc
-            self._utmosv2 = utmosv2
-            self._process_audio_only_versa = process_audio_only_versa
-            utmos_v2 = utmosv2.create_model(pretrained=bool(self.cfg.get("utmosv2_pretrained", True)))
-            self.predictor_dict["utmosv2"] = utmos_v2.to(self.device)
-            self.predictor_fs["utmosv2"] = 16000
-
         if any(x in predictor_types for x in ("dnsmos", "plcmos")):
-            try:
-                import onnxruntime  # noqa: F401
-                from speechmos import dnsmos, plcmos
-            except Exception as exc:  # pragma: no cover - runtime dependency
-                raise RuntimeError(f"speechmos/onnxruntime is required for dnsmos/plcmos: {exc}") from exc
+            import onnxruntime  # noqa: F401
+            from speechmos import dnsmos, plcmos
         else:
             dnsmos = None
             plcmos = None
@@ -128,93 +132,66 @@ class PseudoMOSScorer(BaseScorer):
             elif predictor in {"utmos", "utmosv2"}:
                 continue
             elif predictor == "singmos_v1":
-                torch.hub.set_dir(cache_dir)
+                torch.hub.set_dir(self.cache_dir)
                 singmos = torch.hub.load(
-                    str(self.cfg.get("singmos_hub_repo", "South-Twilight/SingMOS:v1.1.1")),
+                    self.singmos_hub_repo,
                     "singmos_v1",
                     trust_repo=True,
                 ).to(self.device)
-                self.predictor_dict["singmos_v1"] = singmos
-                self.predictor_fs["singmos_v1"] = 16000
+                self.predictor_dict["singmos_v1"] = singmos.float()
+                self.predictor_fs["singmos_v1"] = 44100
             elif predictor == "singmos_pro":
-                torch.hub.set_dir(cache_dir)
+                torch.hub.set_dir(self.cache_dir)
                 singmos = torch.hub.load(
-                    str(self.cfg.get("singmos_hub_repo", "South-Twilight/SingMOS:v1.1.1")),
+                    self.singmos_hub_repo,
                     "singmos_pro",
                     trust_repo=True,
                 ).to(self.device)
-                self.predictor_dict["singmos_pro"] = singmos
-                self.predictor_fs["singmos_pro"] = 16000
+                self.predictor_dict["singmos_pro"] = singmos.float()
+                self.predictor_fs["singmos_pro"] = 44100
             elif predictor.startswith("dnsmos_pro_"):
+                from speechmos import dnsmos_pro
                 variant = predictor[len("dnsmos_pro_") :]
-                model_path = Path(cache_dir) / f"dnsmos_pro_{variant}.pt"
-                if not model_path.exists():
-                    if not bool(self.cfg.get("allow_download", False)):
-                        raise RuntimeError(f"{model_path} not found and allow_download=false")
-                    import requests
-
-                    url = (
-                        "https://github.com/fcumlin/DNSMOSPro/raw/refs/heads/main/"
-                        f"runs/{variant.upper()}/model_best.pt"
-                    )
-                    response = requests.get(url, timeout=int(self.runtime.get("timeout_sec", 90)))
-                    response.raise_for_status()
-                    model_path.write_bytes(response.content)
-                self.predictor_dict[predictor] = torch.jit.load(str(model_path), map_location=self.device)
+                model = dnsmos_pro.DNSMOS_PRO(variant)
+                if self.device.startswith("cuda"):
+                    model.cuda()
+                self.predictor_dict[predictor] = model
                 self.predictor_fs[predictor] = 16000
             else:
-                raise NotImplementedError(f"Not supported predictor type: {predictor}")
-
-        self._initialized = True
+                raise NotImplementedError(f"Unsupported pseudo_mos predictor: {predictor}")
 
     def _normalize_audio(self, wav: np.ndarray) -> np.ndarray:
-        max_val = float(np.max(np.abs(wav))) if wav.size > 0 else 0.0
-        if max_val > 0:
-            return wav / max_val
-        return wav
+        return wav / (np.max(np.abs(wav)) + 1e-9)
 
     def _predict_one(self, wav: np.ndarray, fs: int) -> dict[str, float]:
-        if not self._initialized:
-            self._setup_predictors()
-        assert self._torch is not None
-        assert self._librosa is not None
-
-        scores: dict[str, float] = {}
+        import librosa
         torch = self._torch
-        librosa = self._librosa
         use_gpu = self.device.startswith("cuda")
+        scores: dict[str, float] = {}
 
-        for predictor in self.predictor_dict.keys():
+        for predictor in self._predictor_types():
             if predictor == "utmos":
                 target_fs = self.predictor_fs["utmos"]
                 pred = librosa.resample(wav, orig_sr=fs, target_sr=target_fs) if fs != target_fs else wav
                 pred_tensor = torch.from_numpy(pred).unsqueeze(0)
                 if use_gpu:
                     pred_tensor = pred_tensor.to(self.device)
-                score = self.predictor_dict["utmos"](pred_tensor.float(), target_fs)[0].item()
+                score = self.predictor_dict["utmos"](pred_tensor.float(), target_fs).item()
                 scores["utmos"] = float(score)
             elif predictor == "utmosv2":
                 target_fs = self.predictor_fs["utmosv2"]
                 pred = librosa.resample(wav, orig_sr=fs, target_sr=target_fs) if fs != target_fs else wav
-                if self._utmosv2 is None or self._process_audio_only_versa is None:
-                    raise RuntimeError("utmosv2 is unavailable")
-                cfg = self.predictor_dict["utmosv2"].cfg
-                spec_info = self._process_audio_only_versa(pred, cfg)
-                spec_tensor = torch.tensor(spec_info).float().unsqueeze(0)
-                data_type = np.zeros(int(self.cfg.get("utmosv2_data_type_len", 10)), dtype=np.float32)
-                data_type_idx = int(self.cfg.get("utmosv2_data_type_index", 1))
-                if 0 <= data_type_idx < data_type.shape[0]:
-                    data_type[data_type_idx] = float(self.cfg.get("utmosv2_data_type_value", 0.0))
-                d = torch.tensor(data_type).unsqueeze(0)
                 pred_tensor = torch.from_numpy(pred).unsqueeze(0)
                 if use_gpu:
-                    spec_tensor = spec_tensor.to(self.device)
-                    d = d.to(self.device)
                     pred_tensor = pred_tensor.to(self.device)
-
-                repeat_n = int(self.cfg.get("utmosv2_num_repetitions", 5))
-                vals: list[float] = []
                 with torch.no_grad():
+                    spec_tensor, domain = self._process_audio_only_versa(pred_tensor, target_fs)
+                    if use_gpu:
+                        spec_tensor = spec_tensor.to(self.device)
+                    # repeat for robustness if short
+                    repeat_n = 4
+                    vals = []
+                    d = torch.tensor([domain]).to(self.device) if use_gpu else torch.tensor([domain])
                     for _ in range(max(1, repeat_n)):
                         vals.append(
                             float(
@@ -272,13 +249,21 @@ class PseudoMOSScorer(BaseScorer):
                 raise NotImplementedError(f"Not supported predictor: {predictor}")
         return scores
 
+    @staticmethod
+    def _clamp01(value: float) -> float:
+        if value < 0.0:
+            return 0.0
+        if value > 1.0:
+            return 1.0
+        return value
+
     def _aggregate_score(self, metrics: dict[str, float]) -> float | None:
         if not metrics:
             return None
-        bounds_cfg = dict(self.cfg.get("metric_bounds") or {})
-        weights_cfg = dict(self.task_cfg.get("aggregate_weights") or self.cfg.get("aggregate_weights") or {})
-        agg_keys = list(self.task_cfg.get("aggregate_keys") or self.cfg.get("aggregate_keys") or metrics.keys())
-        normalize = bool(self.cfg.get("normalize_aggregate", True))
+        bounds_cfg = self.metric_bounds
+        weights_cfg = dict(self.task_cfg.get("aggregate_weights") or self.aggregate_weights_default)
+        agg_keys = list(self.task_cfg.get("aggregate_keys") or self.aggregate_keys_default or metrics.keys())
+        normalize = self.normalize_aggregate
 
         values: list[float] = []
         weights: list[float] = []
@@ -307,7 +292,6 @@ class PseudoMOSScorer(BaseScorer):
 
     def configure_task(self, task_cfg: dict[str, Any] | None) -> None:
         super().configure_task(task_cfg)
-        # Build score_keys from predictor types so submetrics are aggregated
         predictor_types = self._predictor_types()
         extra_keys: list[str] = []
         for pt in predictor_types:
@@ -321,26 +305,9 @@ class PseudoMOSScorer(BaseScorer):
             self.score_keys = ["score"] + extra_keys
 
     def run(self, samples: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-
-
-        try:
-            import librosa  # local import to keep module optional
-        except Exception as exc:
-            rows = [
-                self.make_result(
-                    sample_id=str(s["sample_id"]),
-                    score=None,
-                    valid=False,
-                    error="pseudo_mos_dependency_missing",
-                    reason=str(exc),
-                )
-                for s in samples
-            ]
-            return self.finalize(rows)
-
-        # ------------------------------------------------------------------
+        import librosa  # local import to keep module optional
+        
         # Phase 1: load audio and run predictors for all samples
-        # ------------------------------------------------------------------
         pending: list[dict[str, Any]] = []
         rows: list[dict[str, Any]] = []
 
@@ -365,9 +332,7 @@ class PseudoMOSScorer(BaseScorer):
                     )
                 )
 
-        # ------------------------------------------------------------------
         # Phase 2: aggregate scores
-        # ------------------------------------------------------------------
         metric_collect: dict[str, list[float]] = {}
 
         for item in tqdm(pending, desc=f"{self.name} [score]", leave=False):
@@ -380,7 +345,6 @@ class PseudoMOSScorer(BaseScorer):
                 for k, v in metrics.items():
                     if math.isfinite(v):
                         metric_collect.setdefault(k, []).append(float(v))
-                # Flatten sub-metrics into extra so score_keys can find them
                 extra: dict[str, Any] = {"metrics": metrics}
                 extra.update({k: v for k, v in metrics.items()})
                 rows.append(
@@ -406,10 +370,3 @@ class PseudoMOSScorer(BaseScorer):
         rows, summary = self.finalize(rows)
         summary["submetric_avg"] = {k: safe_mean(vs) for k, vs in metric_collect.items()}
         return rows, summary
-    @staticmethod
-    def _clamp01(value: float) -> float:
-        if value < 0.0:
-            return 0.0
-        if value > 1.0:
-            return 1.0
-        return value

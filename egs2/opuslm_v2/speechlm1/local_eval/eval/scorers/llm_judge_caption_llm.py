@@ -4,11 +4,11 @@ import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
+import requests
 from tqdm import tqdm
 
 from .base import coerce_bool, render_template, try_parse_json
 from .base import BaseScorer
-from .clients import build_client
 
 
 def _clamp01(value: float) -> float:
@@ -30,27 +30,22 @@ class LLMJudgeCaptionLLMScorer(BaseScorer):
         self,
         *,
         name: str,
-        cfg: dict[str, Any],
-        runtime: dict[str, Any],
-        global_config: dict[str, Any] | None = None,
+        captioner_model_ref: str = "",
+        judge_model_ref: str = "",
+        global_models: dict[str, Any] | None = None,
+        caption_decode_kwargs: dict[str, Any] | None = None,
+        judge_decode_kwargs: dict[str, Any] | None = None,
+        num_workers: int = 4,
+        **kwargs: Any,
     ) -> None:
-        super().__init__(name=name, cfg=cfg, runtime=runtime)
-        global_config = global_config or {}
-        models_cfg = global_config.get("models", {})
-
-        captioner_ref = str(_require_key(self.cfg, "captioner_model_ref", f"scorers.{name}"))
-        judge_ref = str(_require_key(self.cfg, "judge_model_ref", f"scorers.{name}"))
+        super().__init__(name=name)
+        self.num_workers = num_workers
+        self.caption_decode_kwargs = dict(caption_decode_kwargs or {})
+        self.judge_decode_kwargs = dict(judge_decode_kwargs or {})
         
-        if captioner_ref not in models_cfg:
-            raise KeyError(f"captioner_model_ref `{captioner_ref}` not found in models config")
-        if judge_ref not in models_cfg:
-            raise KeyError(f"judge_model_ref `{judge_ref}` not found in models config")
-            
-        self.captioner_client = build_client(models_cfg[captioner_ref])
-        self.judge_client = build_client(models_cfg[judge_ref])
-
-        self.caption_decode_kwargs = dict(self.cfg.get("caption_decode_kwargs", {}))
-        self.judge_decode_kwargs = dict(self.cfg.get("judge_decode_kwargs", {}))
+        global_models = global_models or {}
+        self.captioner_model_cfg = dict(global_models.get(captioner_model_ref, {}))
+        self.judge_model_cfg = dict(global_models.get(judge_model_ref, {}))
 
     def _resolve_task(self) -> tuple[str, str, str, str, str, dict[str, Any], dict[str, Any]]:
         prompts = _require_key(self.task_cfg, "prompts", "tasks.<type>.scorers[]")
@@ -75,6 +70,37 @@ class LLMJudgeCaptionLLMScorer(BaseScorer):
             judge_decode_kwargs,
         )
 
+    def _call_qwen(self, model_cfg: dict[str, Any], messages: list[dict[str, Any]], decode_kwargs: dict[str, Any]) -> str:
+        api_key = model_cfg.get("api_key", "")
+        base_url = model_cfg.get("base_url", "").rstrip("/")
+        endpoint = f"{base_url}/chat/completions"
+        model = model_cfg.get("model", "")
+        headers = dict(model_cfg.get("headers", {}))
+        
+        if api_key and "Authorization" not in headers:
+            headers["Authorization"] = f"Bearer {api_key}"
+        if "Content-Type" not in headers:
+            headers["Content-Type"] = "application/json"
+            
+        payload = {"model": model, "messages": messages, "stream": False}
+        payload.update(model_cfg.get("decode_kwargs", {}))
+        payload.update(decode_kwargs)
+        
+        resp = requests.post(endpoint, headers=headers, json=payload, timeout=model_cfg.get("timeout_sec", 60))
+        resp.raise_for_status()
+        data = resp.json()
+        
+        if isinstance(data, dict):
+            if "choices" in data and isinstance(data["choices"], list) and data["choices"]:
+                first = data["choices"][0]
+                if isinstance(first, dict) and "message" in first and isinstance(first["message"], dict):
+                    return str(first["message"].get("content", ""))
+            if "content" in data:
+                return str(data["content"])
+            if "text" in data:
+                return str(data["text"])
+        return json.dumps(data, ensure_ascii=False)
+
     def _caption_audio(
         self,
         *,
@@ -97,8 +123,7 @@ class LLMJudgeCaptionLLMScorer(BaseScorer):
         ]
         decode = dict(self.caption_decode_kwargs)
         decode.update(caption_decode_kwargs)
-        response = self.captioner_client.infer(messages=messages, **decode)
-        return str(response).strip()
+        return self._call_qwen(self.captioner_model_cfg, messages, decode).strip()
 
     def _infer_one(self, sample: dict[str, Any]) -> dict[str, Any]:
         sample_id = str(sample["sample_id"])
@@ -139,8 +164,7 @@ class LLMJudgeCaptionLLMScorer(BaseScorer):
         ]
         judge_decode = dict(self.judge_decode_kwargs)
         judge_decode.update(task_judge_decode_kwargs)
-        judge_resp = self.judge_client.infer(messages=judge_messages, **judge_decode)
-        judge_raw = str(judge_resp)
+        judge_raw = self._call_qwen(self.judge_model_cfg, judge_messages, judge_decode)
         
         return {
             "sample_id": sample_id,
@@ -150,12 +174,7 @@ class LLMJudgeCaptionLLMScorer(BaseScorer):
         }
 
     def run(self, samples: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        if "num_workers" in self.task_cfg:
-            workers = int(self.task_cfg["num_workers"])
-        elif "num_workers" in self.runtime:
-            workers = int(self.runtime["num_workers"])
-        else:
-            workers = 4
+        workers = int(self.task_cfg.get("num_workers", self.num_workers))
             
         # Phase 1: Inference
         inferences: dict[str, dict[str, Any]] = {}

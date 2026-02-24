@@ -70,7 +70,7 @@ def get_args():
     parser.add_argument(
         "--gpu-memory-utilization",
         type=float,
-        default=0.5,
+        default=0.3,
         help="GPU memory utilization ratio 0.0-1.0 (default: 0.5)"
     )
     parser.add_argument(
@@ -207,6 +207,7 @@ def map_jsonl_to_step_audio_params(data):
 
     # Step-Audio 不原生支持的音效（如 reverb, volume, pitch），可根据实际情况选择是否补充额外逻辑
     # 若不支持则返回 None 忽略处理
+    print(">>>>", step_edit_type, step_edit_info, target_text)
     return step_edit_type, step_edit_info, target_text
 
 

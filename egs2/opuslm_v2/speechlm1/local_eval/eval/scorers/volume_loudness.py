@@ -22,6 +22,10 @@ class VolumeLoudnessScorer(BaseScorer):
             return 1.0
         return value
 
+    def __init__(self, *, name: str, delta_tolerance_db: float = 3.0, **kwargs: Any) -> None:
+        super().__init__(name=name)
+        self.delta_tolerance_db = delta_tolerance_db
+
     def _extract_volume_factor(self, sample: dict[str, Any]) -> float | None:
         candidates = []
         edit_kwargs = sample.get("edit_kwargs")
@@ -44,11 +48,9 @@ class VolumeLoudnessScorer(BaseScorer):
         return float(meter.integrated_loudness(audio))
 
     def run(self, samples: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        tol_db = float(self.cfg.get("delta_tolerance_db", 3.0))
+        tol_db = self.delta_tolerance_db
 
-        # ------------------------------------------------------------------
         # Phase 1: read LUFS measurements for all samples
-        # ------------------------------------------------------------------
         pending: list[dict[str, Any]] = []
         rows: list[dict[str, Any]] = []
 
@@ -81,9 +83,7 @@ class VolumeLoudnessScorer(BaseScorer):
                     )
                 )
 
-        # ------------------------------------------------------------------
         # Phase 2: compute scores
-        # ------------------------------------------------------------------
         for item in tqdm(pending, desc=f"{self.name} [score]", leave=False):
             sample_id = item["sample_id"]
             try:
