@@ -1,8 +1,5 @@
 runtime:
   num_workers: 8
-  timeout_sec: 90
-  failure_policy: skip
-  print_overall: false
   use_default_task_mapping: false
 
 models:
@@ -11,7 +8,6 @@ models:
     api_key: ""
     base_url: "http://cnode1-010:9000/v1"
     model: "Qwen/Qwen3-Omni-30B-A3B-Captioner"
-    timeout_sec: 120
     headers: {}
     decode_kwargs:
       temperature: 0.65
@@ -22,7 +18,6 @@ models:
     api_key: ""
     base_url: "http://cnode1-010:8100/v1"
     model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
-    timeout_sec: 120
     headers: {}
     decode_kwargs:
       temperature: 0.2
@@ -33,7 +28,6 @@ models:
     api_key: "${Authorization}"
     base_url: "https://your-gemini-api-endpoint"
     model: "gemini-2.5-pro"
-    timeout_sec: 120
     headers:
       Authorization: "${Authorization}"
       Cookie: "${Cookie}"
@@ -45,16 +39,12 @@ models:
 scorers:
   asr_wer:
     model_name: openai/whisper-large-v3
-    device: cuda
-    compute_type: bfloat16
     batch_size: 16
     language: en
 
   speaker_similarity_wespeaker:
     model_id: "english"
     device: "cuda"
-    reference_audio_key: "audio_path"
-    hypothesis_audio_key: "eval_audio_path"
 
   llm_judge_gemini:
     model_ref: gemini_judge
@@ -77,7 +67,7 @@ scorers:
 
   pseudo_mos:
     use_gpu: true
-    cache_dir: "~/.versa_cache"
+    cache_dir: "versa_cache"
     predictor_types: ["utmos", "dnsmos"]
     predictor_args:
       dnsmos:
@@ -105,52 +95,30 @@ tasks:
     scorers:
       - name: asr_wer
       - name: speaker_similarity_wespeaker
-        prompt_audio_key: audio_path
-        reference_audio_key: audio_path
-        hypothesis_audio_key: eval_audio_path
-        score_mode: relative_to_ref
 
   transcription_del:
     scorers:
       - name: asr_wer
       - name: speaker_similarity_wespeaker
-        prompt_audio_key: audio_path
-        reference_audio_key: audio_path
-        hypothesis_audio_key: eval_audio_path
-        score_mode: relative_to_ref
 
   transcription_sub:
     scorers:
       - name: asr_wer
       - name: speaker_similarity_wespeaker
-        prompt_audio_key: audio_path
-        reference_audio_key: audio_path
-        hypothesis_audio_key: eval_audio_path
-        score_mode: relative_to_ref
 
   transcription_replace_sentence:
     scorers:
       - name: asr_wer
       - name: speaker_similarity_wespeaker
-        prompt_audio_key: audio_path
-        reference_audio_key: audio_path
-        hypothesis_audio_key: eval_audio_path
-        score_mode: relative_to_ref
 
   transcription_add_paralinguistic:
     scorers:
       - name: asr_wer
       - name: speaker_similarity_wespeaker
-        prompt_audio_key: audio_path
-        reference_audio_key: audio_path
-        hypothesis_audio_key: eval_audio_path
-        score_mode: relative_to_ref
 
   style_whisper:
     scorers:
       - name: llm_judge_gemini
-        audio_a_key: audio_path
-        audio_b_key: eval_audio_path
         prompts:
           system: |-
             You are an expert evaluator. Compare style consistency between the original and modified audios.
@@ -168,11 +136,7 @@ tasks:
   style_emotion:
     scorers:
       - name: emotion_modelscope
-        label_field: emotion_label
-        level_field: emotion_level
       - name: llm_judge_gemini
-        audio_a_key: audio_path
-        audio_b_key: eval_audio_path
         prompts:
           system: |-
             You are an expert evaluator. Compare emotional expression between two audios.
@@ -190,8 +154,6 @@ tasks:
     scorers:
       - name: speed_duration
       - name: llm_judge_caption_llm
-        audio_a_key: audio_path
-        audio_b_key: eval_audio_path
         caption_prompt: |-
           Describe the speech rate, articulation pace, and any obvious speed effects in this audio.
         prompts:
@@ -216,8 +178,6 @@ tasks:
     scorers:
       - name: volume_loudness
       - name: llm_judge_caption_llm
-        audio_a_key: audio_path
-        audio_b_key: eval_audio_path
         caption_prompt: |-
           Describe loudness, perceived volume, and dynamic intensity in this audio.
         prompts:
@@ -242,8 +202,6 @@ tasks:
     scorers:
       - name: pitch_shift
       - name: llm_judge_caption_llm
-        audio_a_key: audio_path
-        audio_b_key: eval_audio_path
         caption_prompt: |-
           Describe perceived vocal pitch and timbre characteristics in this audio.
         prompts:
@@ -267,8 +225,6 @@ tasks:
   audio_effect_reverb:
     scorers:
       - name: llm_judge_gemini
-        audio_a_key: audio_path
-        audio_b_key: eval_audio_path
         prompts:
           system: |-
             You are an expert acoustic evaluator for reverberation.
@@ -282,8 +238,6 @@ tasks:
         decode_kwargs: {}
 
       - name: llm_judge_caption_llm
-        audio_a_key: audio_path
-        audio_b_key: eval_audio_path
         caption_prompt: |-
           Describe acoustic space and reverberation (e.g., dry studio vs room/hall echo) in this audio.
         prompts:
@@ -314,8 +268,6 @@ tasks:
           dns_overall: 0.7
           dns_p808: 0.3
       - name: llm_judge_caption_llm
-        audio_a_key: audio_path
-        audio_b_key: eval_audio_path
         caption_prompt: |-
           Describe acoustic cleanliness, dryness, and echo characteristics in this audio.
         prompts:

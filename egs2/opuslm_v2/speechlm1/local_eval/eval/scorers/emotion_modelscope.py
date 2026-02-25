@@ -52,7 +52,7 @@ class EmotionModelscopeScorer(BaseScorer):
         }
 
         from funasr import AutoModel
-        self.model = AutoModel(model=model, hub="hf")
+        self.model = AutoModel(model=model, hub="hf", trust_remote_code=True)
 
     def run(self, samples: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         # ── Phase 1: validate inputs ─────────────────────────────────────────
@@ -88,10 +88,9 @@ class EmotionModelscopeScorer(BaseScorer):
             assert len(audio_paths), "No valid items to process"
 
             results = self.model.generate(audio_paths, granularity="utterance", extract_embedding=False, disable_pbar=True, **self.gen_kwargs)
-            labels = results["labels"]
-            scores = results["scores"]
             for idx in range(len(audio_paths)):
-                predictions.append({"hyp_label": labels[idx], "confidence": float(scores[idx])})
+                max_idx = np.argmax(results[idx]["scores"])
+                predictions.append({"hyp_label": results[idx]["labels"][max_idx], "confidence": float(results[idx]["scores"][max_idx]), "conf_dict": dict(zip(results[idx]["labels"], results[idx]["scores"]))})
         except Exception as exc:
             for item in valid_items:
                 error_rows.append(self.make_result(
@@ -110,7 +109,7 @@ class EmotionModelscopeScorer(BaseScorer):
             leave=False,
         ):
             sample_id = item["sample_id"]
-            ref = item["ref"]
+            ref = item["emotion2vec_ref"]
             hyp = pred["hyp_label"]
             conf = pred["confidence"]
 

@@ -6,7 +6,7 @@ import json
 import re
 
 def safe_mean(values: list[float]) -> float | None:
-    if not values:
+    if not values or len(values) == 0:
         return None
     return float(sum(values) / len(values))
 
@@ -145,4 +145,4 @@ class BaseScorer(ABC):
         }
 
     def finalize(self, rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        return rows, summarize_metric_rows(rows, self.score_keys)
+        return rows, summarize_metric_rows(rows, score_keys=self.score_keys)

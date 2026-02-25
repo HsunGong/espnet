@@ -12,11 +12,7 @@ from .base import BaseScorer
 
 
 def _clamp01(value: float) -> float:
-    if value < 0.0:
-        return 0.0
-    if value > 1.0:
-        return 1.0
-    return value
+    return max(0.0, min(1.0, value))
 
 
 def _require_key(mapping: dict[str, Any], key: str, path: str) -> Any:
@@ -42,211 +38,120 @@ class LLMJudgeCaptionLLMScorer(BaseScorer):
         self.num_workers = num_workers
         self.caption_decode_kwargs = dict(caption_decode_kwargs or {})
         self.judge_decode_kwargs = dict(judge_decode_kwargs or {})
-        
-        global_models = global_models or {}
-        self.captioner_model_cfg = dict(global_models.get(captioner_model_ref, {}))
-        self.judge_model_cfg = dict(global_models.get(judge_model_ref, {}))
 
-    def _resolve_task(self) -> tuple[str, str, str, str, str, dict[str, Any], dict[str, Any]]:
+        models = global_models or {}
+
+        cap = dict(models.get(captioner_model_ref, {}))
+        self.captioner_endpoint: str = str(cap.get("base_url", "")).rstrip("/") + "/chat/completions"
+        self.captioner_model: str = str(cap.get("model", ""))
+        self.captioner_headers: dict[str, str] = dict(cap.get("headers", {}))
+        self.captioner_model_decode_kwargs: dict[str, Any] = dict(cap.get("decode_kwargs", {}))
+        _cap_key = str(cap.get("api_key", ""))
+        if _cap_key and "Authorization" not in self.captioner_headers:
+            self.captioner_headers["Authorization"] = f"Bearer {_cap_key}"
+        self.captioner_headers.setdefault("Content-Type", "application/json")
+
+        jdg = dict(models.get(judge_model_ref, {}))
+        self.judge_endpoint: str = str(jdg.get("base_url", "")).rstrip("/") + "/chat/completions"
+        self.judge_model: str = str(jdg.get("model", ""))
+        self.judge_headers: dict[str, str] = dict(jdg.get("headers", {}))
+        self.judge_model_decode_kwargs: dict[str, Any] = dict(jdg.get("decode_kwargs", {}))
+        _jdg_key = str(jdg.get("api_key", ""))
+        if _jdg_key and "Authorization" not in self.judge_headers:
+            self.judge_headers["Authorization"] = f"Bearer {_jdg_key}"
+        self.judge_headers.setdefault("Content-Type", "application/json")
+
+    def _resolve_task(self) -> tuple[str, str, str, dict[str, Any], dict[str, Any]]:
         prompts = _require_key(self.task_cfg, "prompts", "tasks.<type>.scorers[]")
         system_prompt = str(_require_key(prompts, "system", "tasks.<type>.scorers[].prompts"))
         user_prompt = str(_require_key(prompts, "user", "tasks.<type>.scorers[].prompts"))
         caption_prompt = str(_require_key(self.task_cfg, "caption_prompt", "tasks.<type>.scorers[]"))
-        audio_a_key = str(_require_key(self.task_cfg, "audio_a_key", "tasks.<type>.scorers[]"))
-        audio_b_key = str(_require_key(self.task_cfg, "audio_b_key", "tasks.<type>.scorers[]"))
-        caption_decode_kwargs: dict[str, Any] = {}
-        judge_decode_kwargs: dict[str, Any] = {}
-        if "caption_decode_kwargs" in self.task_cfg:
-            caption_decode_kwargs = dict(self.task_cfg["caption_decode_kwargs"])
-        if "judge_decode_kwargs" in self.task_cfg:
-            judge_decode_kwargs = dict(self.task_cfg["judge_decode_kwargs"])
-        return (
-            system_prompt,
-            user_prompt,
-            caption_prompt,
-            audio_a_key,
-            audio_b_key,
-            caption_decode_kwargs,
-            judge_decode_kwargs,
-        )
+        caption_decode_kwargs = dict(self.task_cfg.get("caption_decode_kwargs") or {})
+        judge_decode_kwargs = dict(self.task_cfg.get("judge_decode_kwargs") or {})
+        return system_prompt, user_prompt, caption_prompt, caption_decode_kwargs, judge_decode_kwargs
 
-    def _call_qwen(self, model_cfg: dict[str, Any], messages: list[dict[str, Any]], decode_kwargs: dict[str, Any]) -> str:
-        api_key = model_cfg.get("api_key", "")
-        base_url = model_cfg.get("base_url", "").rstrip("/")
-        endpoint = f"{base_url}/chat/completions"
-        model = model_cfg.get("model", "")
-        headers = dict(model_cfg.get("headers", {}))
-        
-        if api_key and "Authorization" not in headers:
-            headers["Authorization"] = f"Bearer {api_key}"
-        if "Content-Type" not in headers:
-            headers["Content-Type"] = "application/json"
-            
-        payload = {"model": model, "messages": messages, "stream": False}
-        payload.update(model_cfg.get("decode_kwargs", {}))
-        payload.update(decode_kwargs)
-        
-        resp = requests.post(endpoint, headers=headers, json=payload, timeout=model_cfg.get("timeout_sec", 60))
+    def _call_api(self, endpoint: str, model: str, headers: dict, base_decode: dict, extra_decode: dict, messages: list) -> str:
+        payload = {"model": model, "messages": messages, "stream": False, **base_decode, **extra_decode}
+        resp = requests.post(endpoint, headers=headers, json=payload)
         resp.raise_for_status()
         data = resp.json()
-        
         if isinstance(data, dict):
-            if "choices" in data and isinstance(data["choices"], list) and data["choices"]:
-                first = data["choices"][0]
-                if isinstance(first, dict) and "message" in first and isinstance(first["message"], dict):
-                    return str(first["message"].get("content", ""))
+            if "choices" in data and data["choices"]:
+                return str(data["choices"][0].get("message", {}).get("content", ""))
             if "content" in data:
                 return str(data["content"])
             if "text" in data:
                 return str(data["text"])
         return json.dumps(data, ensure_ascii=False)
 
-    def _caption_audio(
-        self,
-        *,
-        audio_path: str,
-        sample: dict[str, Any],
-        caption_prompt_template: str,
-        caption_decode_kwargs: dict[str, Any],
-    ) -> str:
-        prompt_context = dict(sample)
-        prompt_context["sample_json"] = json.dumps(sample, ensure_ascii=False)
-        caption_prompt = render_template(caption_prompt_template, prompt_context)
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": caption_prompt},
-                    {"type": "audio_url", "audio_url": {"url": f"file://{audio_path}"}},
-                ],
-            }
-        ]
-        decode = dict(self.caption_decode_kwargs)
-        decode.update(caption_decode_kwargs)
-        return self._call_qwen(self.captioner_model_cfg, messages, decode).strip()
+    def _caption_audio(self, audio_path: str, sample: dict[str, Any], caption_prompt_template: str, extra_decode: dict[str, Any]) -> str:
+        context = {**sample, "sample_json": json.dumps(sample, ensure_ascii=False)}
+        messages = [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": render_template(caption_prompt_template, context)},
+                {"type": "audio_url", "audio_url": {"url": f"file://{audio_path}"}},
+            ],
+        }]
+        return self._call_api(
+            self.captioner_endpoint, self.captioner_model, self.captioner_headers,
+            self.captioner_model_decode_kwargs, {**self.caption_decode_kwargs, **extra_decode}, messages,
+        ).strip()
 
     def _infer_one(self, sample: dict[str, Any]) -> dict[str, Any]:
-        sample_id = str(sample["sample_id"])
-        (
-            system_tmpl,
-            user_tmpl,
-            caption_prompt_tmpl,
-            audio_a_key,
-            audio_b_key,
-            task_caption_decode_kwargs,
-            task_judge_decode_kwargs,
-        ) = self._resolve_task()
-        
-        audio_a_path = str(sample[audio_a_key])
-        audio_b_path = str(sample[audio_b_key])
+        sid = str(sample["sample_id"])
+        system_tmpl, user_tmpl, caption_tmpl, task_cap_decode, task_jdg_decode = self._resolve_task()
 
-        caption_a = self._caption_audio(
-            audio_path=audio_a_path,
-            sample=sample,
-            caption_prompt_template=caption_prompt_tmpl,
-            caption_decode_kwargs=task_caption_decode_kwargs,
-        )
-        caption_b = self._caption_audio(
-            audio_path=audio_b_path,
-            sample=sample,
-            caption_prompt_template=caption_prompt_tmpl,
-            caption_decode_kwargs=task_caption_decode_kwargs,
-        )
+        caption_a = self._caption_audio(str(sample["audio_path"]), sample, caption_tmpl, task_cap_decode)
+        caption_b = self._caption_audio(str(sample["eval_audio_path"]), sample, caption_tmpl, task_cap_decode)
 
-        context = dict(sample)
-        context["sample_json"] = json.dumps(sample, ensure_ascii=False)
-        context["caption_a"] = caption_a
-        context["caption_b"] = caption_b
-        
+        context = {**sample, "sample_json": json.dumps(sample, ensure_ascii=False), "caption_a": caption_a, "caption_b": caption_b}
         judge_messages = [
             {"role": "system", "content": render_template(system_tmpl, context)},
             {"role": "user", "content": render_template(user_tmpl, context)},
         ]
-        judge_decode = dict(self.judge_decode_kwargs)
-        judge_decode.update(task_judge_decode_kwargs)
-        judge_raw = self._call_qwen(self.judge_model_cfg, judge_messages, judge_decode)
-        
-        return {
-            "sample_id": sample_id,
-            "caption_a": caption_a,
-            "caption_b": caption_b,
-            "judge_raw": judge_raw,
-        }
+        judge_raw = self._call_api(
+            self.judge_endpoint, self.judge_model, self.judge_headers,
+            self.judge_model_decode_kwargs, {**self.judge_decode_kwargs, **task_jdg_decode}, judge_messages,
+        )
+        return {"sample_id": sid, "caption_a": caption_a, "caption_b": caption_b, "judge_raw": judge_raw}
 
     def run(self, samples: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         workers = int(self.task_cfg.get("num_workers", self.num_workers))
-            
-        # Phase 1: Inference
+
         inferences: dict[str, dict[str, Any]] = {}
         errors: dict[str, str] = {}
-        
         with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
-            futures = {ex.submit(self._infer_one, sample): sample for sample in samples}
+            futures = {ex.submit(self._infer_one, s): s for s in samples}
             for future in tqdm(as_completed(futures), total=len(futures), desc=f"{self.name} [infer]", leave=False):
-                sample = futures[future]
-                sample_id = str(sample["sample_id"])
+                sid = str(futures[future]["sample_id"])
                 try:
-                    res = future.result()
-                    inferences[sample_id] = res
+                    inferences[sid] = future.result()
                 except Exception as exc:
-                    errors[sample_id] = str(exc)
+                    errors[sid] = str(exc)
 
-        # Phase 2: Aggregation / Scoring
         rows: list[dict[str, Any]] = []
         for sample in tqdm(samples, desc=f"{self.name} [score]", leave=False):
-            sample_id = str(sample["sample_id"])
-            if sample_id in errors:
-                rows.append(self.make_result(
-                    sample_id=sample_id,
-                    score=None,
-                    valid=False,
-                    error="llm_judge_caption_llm_infer_failed",
-                    reason=errors[sample_id],
-                ))
+            sid = str(sample["sample_id"])
+            if sid in errors:
+                rows.append(self.make_result(sample_id=sid, score=None, valid=False, error="llm_judge_caption_llm_infer_failed", reason=errors[sid]))
                 continue
-                
-            res = inferences[sample_id]
+            res = inferences[sid]
             judge_raw = res["judge_raw"]
             try:
                 parsed = try_parse_json(judge_raw)
                 if parsed is None:
                     raise RuntimeError(f"judge did not return valid JSON: {judge_raw}")
-                valid_raw = _require_key(parsed, "valid", "judge_json")
-                valid = coerce_bool(valid_raw)
+                valid = coerce_bool(_require_key(parsed, "valid", "judge_json"))
                 if valid is None:
-                    raise RuntimeError(f"cannot coerce `valid` to bool: {valid_raw}")
+                    raise RuntimeError("cannot coerce `valid` to bool")
                 reason = str(_require_key(parsed, "reason", "judge_json"))
-                if "score" in parsed:
-                    score = _clamp01(float(parsed["score"]))
-                else:
-                    score = 1.0 if valid else 0.0
-                    
-                extra: dict[str, Any] = {
-                    "caption_a": res["caption_a"],
-                    "caption_b": res["caption_b"],
-                    "judge_raw": judge_raw,
-                }
-                for key in self.score_keys:
-                    if key != "score" and key in parsed:
-                        try:
-                            extra[key] = _clamp01(float(parsed[key]))
-                        except (TypeError, ValueError):
-                            pass
-                            
+                score = _clamp01(float(parsed["score"])) if "score" in parsed else (1.0 if valid else 0.0)
                 rows.append(self.make_result(
-                    sample_id=sample_id,
-                    score=score,
-                    valid=bool(valid),
-                    reason=reason,
-                    extra=extra,
+                    sample_id=sid, score=score, valid=bool(valid), reason=reason,
+                    extra={"caption_a": res["caption_a"], "caption_b": res["caption_b"], "judge_raw": judge_raw},
                 ))
             except Exception as exc:
-                rows.append(self.make_result(
-                    sample_id=sample_id,
-                    score=None,
-                    valid=False,
-                    error="llm_judge_caption_llm_score_failed",
-                    reason=str(exc),
-                ))
+                rows.append(self.make_result(sample_id=sid, score=None, valid=False, error="llm_judge_caption_llm_score_failed", reason=str(exc)))
 
         return self.finalize(rows)

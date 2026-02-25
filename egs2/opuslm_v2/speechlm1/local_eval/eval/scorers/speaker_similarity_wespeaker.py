@@ -21,13 +21,9 @@ class SpeakerSimilarityWespeakerScorer(BaseScorer):
         model_id: str = "english",
         device: str = "cpu",
         batch_size: int = 32,
-        reference_audio_key: str = "audio_path",
-        hypothesis_audio_key: str = "eval_audio_path",
         **kwargs: Any,
     ) -> None:
         super().__init__(name=name)
-        self.reference_audio_key = reference_audio_key
-        self.hypothesis_audio_key = hypothesis_audio_key
         self.batch_size = batch_size
 
         if device.startswith("cuda") and not torch.cuda.is_available():
@@ -93,17 +89,17 @@ class SpeakerSimilarityWespeakerScorer(BaseScorer):
 
     @staticmethod
     def _cosine(a: torch.Tensor, b: torch.Tensor) -> float:
-        return float(torch.nn.functional.cosine_similarity(a.unsqueeze(0), b.unsqueeze(0)).item())
+        cosine_score = torch.dot(a, b) / (torch.norm(a) * torch.norm(b))
+        return cosine_score.item()
 
     def run(self, samples: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        ref_key = str(self.task_cfg.get("reference_audio_key") or self.reference_audio_key)
-        hyp_key = str(self.task_cfg.get("hypothesis_audio_key") or self.hypothesis_audio_key)
-
         # Fail fast: KeyError if a sample is missing the required field
         unique_paths: set[str] = set()
         for sample in samples:
-            unique_paths.add(sample[ref_key])
-            unique_paths.add(sample[hyp_key])
+            if sample["audio_path"]:
+                unique_paths.add(sample["audio_path"])
+            if sample["eval_audio_path"]:
+                unique_paths.add(sample["eval_audio_path"])
 
         embeddings = self._extract_embeddings(list(unique_paths))
 
@@ -113,13 +109,15 @@ class SpeakerSimilarityWespeakerScorer(BaseScorer):
         for sample in tqdm(samples, desc=f"{self.name} [score]", leave=False):
             sample_id = str(sample["sample_id"])
             try:
-                sim = self._cosine(embeddings[sample[ref_key]], embeddings[sample[hyp_key]])
-                score = float(max(0.0, min(1.0, (sim + 1.0) / 2.0)))
+                assert sample["eval_audio_path"] is not None, "missing eval_audio_path"
+                sim = self._cosine(embeddings[sample["audio_path"]], embeddings[sample["eval_audio_path"]])
+                cos_score = (sim + 1.0) / 2  # normalize: [-1, 1] => [0, 1]
+
                 sims.append(sim)
                 rows.append(
                     self.make_result(
                         sample_id=sample_id,
-                        score=score,
+                        score=cos_score,
                         valid=True,
                         reason=f"sim={sim:.4f}",
                         extra={"similarity": sim},

@@ -15,9 +15,15 @@ import librosa
 
 english_normalizer = EnglishTextNormalizer()
 
+global_tags = ["[sigh]", "[laugh]", "[exhale]", "[snort]", "[cough]", "[uhm]", "[surprise-oh]", "[surprise-wa]", "[dissatisfaction-hnn]", "[question-ah]", "[question-yi]"]
 
 def normalize_text(text: str) -> str:
-    return english_normalizer(text.lower().strip())
+    norm_text = text.lower().strip()
+    # also remove some flags (which is not necessary in ASR evaluation)
+    for tag in global_tags:
+        norm_text = norm_text.replace(tag, "")
+    norm_text = english_normalizer(norm_text)
+    return norm_text
 
 
 def _load_audio(path: str, target_sr: int = 16_000) -> np.ndarray:
@@ -30,7 +36,7 @@ def _load_audio(path: str, target_sr: int = 16_000) -> np.ndarray:
 
 
 class ASRWERScorer(BaseScorer):
-    score_keys = ["wer", "hits", "substitutions", "deletions", "insertions"]
+    score_keys = ["wer", "edit_acc", "hits", "substitutions", "deletions", "insertions"]
 
     def __init__(
         self,
@@ -94,9 +100,10 @@ class ASRWERScorer(BaseScorer):
         valid_items: list[dict[str, Any]] = []  # {sample_id, audio, ref}
 
         for sample in tqdm(samples, desc=f"{self.name} [load]", leave=False):
-            sample_id = sample["sample_id"]
+            sample_id = sample["id"]
             audio_path = sample.get("eval_audio_path")
-            ref = sample["target_text"]
+            origin_text = sample["text"]
+            ref_text = sample["target_text"]
 
             if not audio_path:
                 error_rows.append(self.make_result(
@@ -104,7 +111,7 @@ class ASRWERScorer(BaseScorer):
                     error="missing_eval_audio_path",
                 ))
                 continue
-            if not ref:
+            if not ref_text:
                 error_rows.append(self.make_result(
                     sample_id=sample_id, score=None, valid=False,
                     error="missing_reference_text",
@@ -119,7 +126,7 @@ class ASRWERScorer(BaseScorer):
                 ))
                 continue
 
-            valid_items.append({"sample_id": sample_id, "audio": audio, "ref": ref})
+            valid_items.append({"sample_id": sample_id, "audio": audio, "ref_text": ref_text, "origin_text": origin_text})
 
         # ── Phase 2: batch transcription ─────────────────────────────────────
         transcripts: dict[str, str] = {}  # sample_id -> hypothesis text
@@ -149,7 +156,27 @@ class ASRWERScorer(BaseScorer):
             if sample_id not in transcripts:
                 continue  # transcription already recorded as error
 
-            ref_norm = normalize_text(item["ref"])
+            ref_norm = normalize_text(item["ref_text"])
+            origin_norm = normalize_text(item["origin_text"])
+
+            # find differ phase between ref_norm and origin_norm?
+            word_out = jiwer_process_words(origin_norm, ref_norm)
+            edit_words = []
+            for ali in word_out.alignments[0]:
+                ori_word = " ".join(word_out.references[0][ali.ref_start_idx:ali.ref_end_idx])
+                ref_word = " ".join(word_out.hypotheses[0][ali.hyp_start_idx:ali.hyp_end_idx])
+
+                if ali.type == "substitute":
+                    edit_words.append((ori_word, ref_word))
+                elif ali.type == "delete":
+                    edit_words.append((ori_word, None))
+                elif ali.type == "insert":
+                    edit_words.append((None, ref_word))
+
+            # print(edit_words)
+            # print(word_out.alignments)
+            # print(word_out.references)
+
             hyp_norm = normalize_text(transcripts[sample_id])
             try:
                 word_out = jiwer_process_words(ref_norm, hyp_norm)
@@ -159,20 +186,33 @@ class ASRWERScorer(BaseScorer):
                     word_out.deletions,
                     word_out.insertions,
                 )
-                wer_value = word_out.wer
+                wer_value = word_out.wer * 100
+
+                edit_acc = []
+                for ori_word, ref_word in edit_words:
+                    if ori_word and ref_word:
+                        edit_acc.append(ref_word in hyp_norm and ori_word not in hyp_norm)
+                    elif ref_word:
+                        edit_acc.append(ref_word in hyp_norm)
+                    elif ori_word:
+                        edit_acc.append(ori_word not in hyp_norm)
+
                 scored_rows.append(self.make_result(
                     sample_id=sample_id,
                     score=wer_value * 100,
                     valid=True,
-                    reason=f"WER={wer_value*100:.2f} C={C} S={S} D={D} I={I}",
+                    reason=f"WER={wer_value*100:.2f}% C={C} S={S} D={D} I={I}",
                     extra={
-                        "wer": wer_value,
+                        # "wer": wer_value * 100,
                         "hits": C,
                         "substitutions": S,
                         "deletions": D,
                         "insertions": I,
                         "hyp_text": hyp_norm,
                         "ref_text": ref_norm,
+                        "origin_text": origin_norm,
+                        "edit_words": edit_words,
+                        "edit_acc": safe_mean(edit_acc) or 1.0,
                     },
                 ))
             except Exception as exc:
@@ -181,14 +221,15 @@ class ASRWERScorer(BaseScorer):
                     error="asr_wer_failed", reason=str(exc),
                 ))
 
-        rows, summary = self.finalize(error_rows + scored_rows, score_keys=["wer"])
+        rows, summary = self.finalize(error_rows + scored_rows)
 
         summary["submetric_avg"] = {}
         for k in self.score_keys:
             all_values = [row["extra"][k] for row in scored_rows if k in row["extra"]]
-            summary["submetric_avg"][k] = sum(all_values)
+            summary["submetric_avg"][k] = sum(v for v in all_values if v)
 
         # recompute wer (S + D + I) / (H + S + D)
-        summary["submetric_avg"]["real-wer"] = 100 * (summary["submetric_avg"]["substitutions"] + summary["submetric_avg"]["deletions"] + summary["submetric_avg"]["insertions"]) / (summary["submetric_avg"]["hits"] + summary["submetric_avg"]["substitutions"] + summary["submetric_avg"]["deletions"])
+        summary["submetric_avg"]["wer"] = 100 * (summary["submetric_avg"]["substitutions"] + summary["submetric_avg"]["deletions"] + summary["submetric_avg"]["insertions"]) / (summary["submetric_avg"]["hits"] + summary["submetric_avg"]["substitutions"] + summary["submetric_avg"]["deletions"])
 
+        summary["avg_score"] = summary["submetric_avg"]["wer"]
         return rows, summary

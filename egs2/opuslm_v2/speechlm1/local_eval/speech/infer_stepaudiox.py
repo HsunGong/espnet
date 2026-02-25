@@ -207,7 +207,7 @@ def map_jsonl_to_step_audio_params(data):
 
     # Step-Audio 不原生支持的音效（如 reverb, volume, pitch），可根据实际情况选择是否补充额外逻辑
     # 若不支持则返回 None 忽略处理
-    print(">>>>", step_edit_type, step_edit_info, target_text)
+    # print(">>>>", step_edit_type, step_edit_info, target_text)
     return step_edit_type, step_edit_info, target_text
 
 
@@ -264,31 +264,32 @@ def process_jsonl():
                 # 目标保存绝对路径 out_dir/XXX/ID.wav
                 save_audio_path = os.path.abspath(os.path.join(save_dir, f"{utt_id}.wav"))
 
-                print(f"[{utt_id}] Running {step_type} | Info: {step_info} | Audio: {save_audio_path}")
-
                 try:
-                    if step_type == "clone":
-                        output_audio, output_sr = model.clone(
-                            prompt_wav_path=prompt_audio,
-                            prompt_text=prompt_text,
-                            target_text=target_text
-                        )
+                    print(f"[{utt_id}] Running {step_type} | Info: {step_info} | Expect to save Audio: {save_audio_path}")
+
+                    if os.path.exists(save_audio_path):
+                        print(f"[{utt_id}] Output already exists at {save_audio_path}. Skipped.")
                     else:
-                        output_audio, output_sr = model.edit(
-                            prompt_wav_path=prompt_audio,
-                            prompt_text=prompt_text,
-                            target_text=target_text if step_type == "paralinguistic" else "",
-                            edit_type=step_type,
-                            edit_info=step_info
-                        )
-                    
-                    # 保存音频
-                    torchaudio.save(save_audio_path, output_audio.cpu(), output_sr)
-                    
-                    # 写入 SCP（格式：id 绝对路径）
+                        if step_type == "clone":
+                            output_audio, output_sr = model.clone(
+                                prompt_wav_path=prompt_audio,
+                                prompt_text=prompt_text,
+                                target_text=target_text
+                            )
+                        else:
+                            output_audio, output_sr = model.edit(
+                                prompt_wav_path=prompt_audio,
+                                prompt_text=prompt_text,
+                                target_text=target_text if step_type == "paralinguistic" else "",
+                                edit_type=step_type,
+                                edit_info=step_info
+                            )
+
+                        torchaudio.save(save_audio_path, output_audio.cpu(), output_sr)
+
                     fscp.write(f"{utt_id}\t{save_audio_path}\n")
                     fscp.flush()
-                    
+
                 except Exception as e:
                     print(f"[Error] Failed to process {utt_id}: {e}")
 

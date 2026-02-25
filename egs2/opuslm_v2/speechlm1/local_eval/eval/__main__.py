@@ -7,6 +7,7 @@ import json
 import os
 import re
 from tqdm import tqdm
+import logging
 
 from joblib import Parallel, delayed
 
@@ -129,14 +130,12 @@ def build_samples(
     scp = scp_by_type[task_type]
 
     samples: list[dict[str, Any]] = []
-    for sample_id, eval_audio_path in scp.items():
-        if sample_id not in meta:
-            continue
-        sample = dict(meta[sample_id])
+    for sample_id, record in meta.items():
+        sample = record.copy()
         sample["sample_id"] = sample_id
         sample["id"] = sample_id
         sample["edit_type"] = task_type
-        sample["eval_audio_path"] = eval_audio_path
+        sample["eval_audio_path"] = scp.get(sample_id, None)
         samples.append(sample)
 
     stats = {
@@ -146,7 +145,7 @@ def build_samples(
     }
     return samples, stats
 
-def print_task_summary(task_type: str, summaries: dict[str, dict[str, Any]], output_path: str) -> None:
+def print_task_summary(task_type: str, summaries: dict[str, dict[str, Any]], output_path: str | Path) -> None:
     print(f"\n[{task_type}] -> {output_path}")
     for scorer_name, summary in summaries.items():
         avg_score = summary["avg_score"] if "avg_score" in summary else None
@@ -194,6 +193,18 @@ def write_jsonl(path: str | Path, rows: list[dict[str, Any]]) -> None:
     with out_path.open("w", encoding="utf-8") as f:
         for row in rows:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+def write_summary(results_path: str | Path, summaries: dict[str, dict[str, Any]]) -> None:
+    summary_path = Path(str(results_path).replace(".results", ".summary.json"))
+    with summary_path.open("w", encoding="utf-8") as f:
+        json.dump(summaries, f, ensure_ascii=False, indent=2)
+
+def load_summary(results_path: str | Path) -> dict[str, dict[str, Any]] | None:
+    summary_path = Path(str(results_path).replace(".results", ".summary.json"))
+    if not summary_path.exists():
+        return None
+    with summary_path.open("r", encoding="utf-8") as f:
+        return json.load(f)
 
 def read_scp(path: str | Path) -> dict[str, str]:
     mapping: dict[str, str] = {}
@@ -276,6 +287,12 @@ def main() -> None:
         default="",
         help="Comma-separated task types to evaluate; default evaluates all configured tasks.",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        default=False,
+        help="If set, skip tasks whose output .results file already exists and reload their summary.",
+    )
     args = parser.parse_args()
 
 
@@ -322,12 +339,13 @@ def main() -> None:
 
         scorer_kwargs["global_models"] = config.get("models", {})
         scorers_dict[scorer_name] = scorer_cls(name=scorer_name, **scorer_kwargs)
-        print(f"Initialized scorer: {scorer_name} with args: {scorer_kwargs}")
+        logging.debug(f"Initialized scorer: {scorer_name} with args: {scorer_kwargs}")
 
 
     type_list = list(tasks_cfg.keys())
     print(f"Configured tasks: {', '.join(type_list)}")
 
+    full_results = []
     for task_type in tqdm(type_list, desc="tasks"):
         task_entry = tasks_cfg[task_type]
         if "disabled" in task_entry and bool(task_entry["disabled"]):
@@ -340,12 +358,22 @@ def main() -> None:
             print(f"Skip task {task_type}: missing {task_type}.scp")
             continue
 
+        output_path = output_dir / f"{task_type}.results"
+
+        if args.resume and output_path.exists():
+            cached_summary = load_summary(output_path)
+            if cached_summary is not None:
+                print(f"[resume] Skipping task {task_type}: output already exists at {output_path}")
+                full_results.append((task_type, cached_summary, output_path))
+                continue
+            else:
+                print(f"[resume] No summary file found for {task_type}, re-running...")
+
         samples, stats = build_samples(task_type, metadata_by_type, scp_by_type)
+        print(
+            f"task {task_type}: (metadata={stats['metadata_count']} scp={stats['scp_count']})"
+        )
         if not samples:
-            print(
-                f"Skip task {task_type}: no matched samples "
-                f"(metadata={stats['metadata_count']} scp={stats['scp_count']})"
-            )
             continue
 
         if "scorers" in task_entry:
@@ -388,9 +416,13 @@ def main() -> None:
                     per_sample[sid]["metrics"][scorer_name] = metric_payload
 
         result_rows = [per_sample[str(sample["sample_id"])] for sample in samples]
-        output_path = output_dir / f"{task_type}.results"
         write_jsonl(output_path, result_rows)
-        print_task_summary(task_type, task_summaries, str(output_path))
+        write_summary(output_path, task_summaries)
+        print_task_summary(task_type, task_summaries, output_path)
+        full_results.append((task_type, task_summaries, output_path))
+
+    for task_type, task_summaries, output_path in full_results:
+        print_task_summary(task_type, task_summaries, output_path)
 
 
 if __name__ == "__main__":

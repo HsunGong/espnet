@@ -9,25 +9,27 @@ export PYTHONPATH=$(pwd):$PYTHONPATH
 python local_eval/speech/step1_gen.py -i data/test_clean/metadata.jsonl -o data/test_clean/speech_edit -c ./local_eval/speech/gen.yaml -k 200 --nj 256
 
 # gpu-util=0.3 -> support 3 parallel jobs
-CUDA_VISIBLE_DEVICES=7 python local_eval/speech/infer_stepaudiox.py --jsonl-files data/test_clean/speech_edit/audio_effect_dereverb.jsonl --output-dir exp/stepaudiox/test_clean/speech_edit
-CUDA_VISIBLE_DEVICES=7 python local_eval/speech/infer_stepaudiox.py --jsonl-files data/test_clean/speech_edit/style_emotion.jsonl --output-dir exp/stepaudiox/test_clean/speech_edit
-CUDA_VISIBLE_DEVICES=7 python local_eval/speech/infer_stepaudiox.py --jsonl-files data/test_clean/speech_edit/style_whisper.jsonl --output-dir exp/stepaudiox/test_clean/speech_edit
-CUDA_VISIBLE_DEVICES=6 python local_eval/speech/infer_stepaudiox.py --jsonl-files data/test_clean/speech_edit/transcription_add_paralinguistic.jsonl --output-dir exp/stepaudiox/test_clean/speech_edit
-CUDA_VISIBLE_DEVICES=6 python local_eval/speech/infer_stepaudiox.py --jsonl-files data/test_clean/speech_edit/transcription_del.jsonl --output-dir exp/stepaudiox/test_clean/speech_edit
-CUDA_VISIBLE_DEVICES=6 python local_eval/speech/infer_stepaudiox.py --jsonl-files data/test_clean/speech_edit/transcription_ins.jsonl --output-dir exp/stepaudiox/test_clean/speech_edit
-CUDA_VISIBLE_DEVICES=5 python local_eval/speech/infer_stepaudiox.py --jsonl-files data/test_clean/speech_edit/transcription_replace_sentence.jsonl --output-dir exp/stepaudiox/test_clean/speech_edit
-CUDA_VISIBLE_DEVICES=5 python local_eval/speech/infer_stepaudiox.py --jsonl-files data/test_clean/speech_edit/transcription_sub.jsonl --output-dir exp/stepaudiox/test_clean/speech_edit
+python local_eval/speech/infer_parallel.py \
+  --gpus 0,1,2 --max-workers-per-gpu 3 --infer-script local_eval/speech/infer_stepaudiox.py \
+  --output-dir exp/stepaudiox/test_clean/speech_edit --jsonl data/test_clean/speech_edit/*.jsonl
+python local_eval/speech/infer_parallel.py \
+  --gpus 0,1,2 --max-workers-per-gpu 3 --infer-script local_eval/speech/infer_stepaudiox.py \
+  --output-dir exp/stepaudiox/test_clean/speech_edit-short --jsonl data/test_clean/speech_edit-short/*.jsonl
 
-CUDA_VISIBLE_DEVICES=5 python local_eval/speech/infer_minguniaudioedit.py \
-    --jsonl-files data/test_clean/speech_edit/{audio_effect_dereverb,audio_effect_pitch,audio_effect_reverb,audio_effect_speed}.jsonl \
-    --output-dir exp/minguniaudioedit/test_clean/speech_edit
-CUDA_VISIBLE_DEVICES=6 python local_eval/speech/infer_minguniaudioedit.py \
-    --jsonl-files data/test_clean/speech_edit/{audio_effect_volume,style_emotion,style_whisper,transcription_add_paralinguistic}.jsonl \
-    --output-dir exp/minguniaudioedit/test_clean/speech_edit
-CUDA_VISIBLE_DEVICES=7 python local_eval/speech/infer_minguniaudioedit.py \
-    --jsonl-files data/test_clean/speech_edit/{transcription_del,transcription_ins,transcription_replace_sentence,transcription_sub}.jsonl \
-    --output-dir exp/minguniaudioedit/test_clean/speech_edit
+python local_eval/speech/infer_parallel.py \
+  --gpus 0,1,2,3,4,5,6,7 --max-workers-per-gpu 1 --infer-script local_eval/speech/infer_minguniaudioedit.py \
+  --output-dir exp/minguniaudioedit/test_clean/speech_edit-short --jsonl data/test_clean/speech_edit-short/*.jsonl
 
+
+CUDA_VISIBLE_DEVICES=7 python local_eval/speech/infer_cosyvoice3.py --output-dir exp/cv3/test_clean/speech_edit --jsonl-files data/test_clean/speech_edit/{audio_effect_dereverb,style_whisper}.jsonl
+CUDA_VISIBLE_DEVICES=6 python local_eval/speech/infer_cosyvoice3.py --output-dir exp/cv3/test_clean/speech_edit --jsonl-files data/test_clean/speech_edit/{audio_effect_pitch,transcription_add_paralinguistic}.jsonl
+CUDA_VISIBLE_DEVICES=5 python local_eval/speech/infer_cosyvoice3.py --output-dir exp/cv3/test_clean/speech_edit --jsonl-files data/test_clean/speech_edit/{audio_effect_reverb,transcription_del}.jsonl
+CUDA_VISIBLE_DEVICES=4 python local_eval/speech/infer_cosyvoice3.py --output-dir exp/cv3/test_clean/speech_edit --jsonl-files data/test_clean/speech_edit/{audio_effect_speed,transcription_ins}.jsonl
+CUDA_VISIBLE_DEVICES=3 python local_eval/speech/infer_cosyvoice3.py --output-dir exp/cv3/test_clean/speech_edit --jsonl-files data/test_clean/speech_edit/{audio_effect_volume,transcription_replace_sentence}.jsonl
+CUDA_VISIBLE_DEVICES=2 python local_eval/speech/infer_cosyvoice3.py --output-dir exp/cv3/test_clean/speech_edit --jsonl-files data/test_clean/speech_edit/{style_emotion,transcription_sub}.jsonl
+
+
+### special part for bagpiper
 for i in data/test_clean/speech_edit/*.jsonl; do
     python local_eval/speech/assemble_dialogue.py \
     -i "$i" \
@@ -39,8 +41,11 @@ done
 
 yq 'keys[]' data/test_clean/speech_edit/dialogues/data.yaml
 
-CUDA_VISIBLE_DEVICES=1 python -m local_eval.eval --config local_eval/eval/eval.yaml --metadata data/test_clean/speech_edit --data-dir exp/stepaudiox/test_clean/speech_edit
+python3 local_eval/speech/convert_results.py --name-prefix eval-test_clean-v1 \
+  --exp-inference-dir exp/ct-100k-default-mt/inference/inference_audio_step_380000
+### endregion
 
+CUDA_VISIBLE_DEVICES=1 python -m local_eval.eval --config local_eval/eval/eval.yaml --metadata data/test_clean/speech_edit --data-dir exp/stepaudiox/test_clean/speech_edit
 
 # endregion
 
