@@ -1,0 +1,627 @@
+# =============================================================================
+# eval_nonspeech.yaml
+# Evaluation config for non-speech audio edit tasks:
+#   ADD / REMOVE / REPLACE  (gen.yaml data)
+#   CREATIVE EDIT            (gen_v3.yaml data)
+#
+# Four scorer backends:
+#   1. llm_judge_openai      — Qwen3-Omni via vLLM  (direct audio → judge)
+#   2. llm_judge_caption_llm — Captioner + text-LLM judge pipeline
+#   3. llm_judge_gemini      — Gemini multimodal     (direct audio → judge)
+#   4. fad                   — Fréchet Audio Distance (corpus-level)
+#
+# Evaluation Dimensions (for LLM judges):
+#   edit_fidelity  (0/1)  — Was the edit correctly applied?
+#   audio_quality  (1-10) — Production quality, artifacts, distortion
+#   coherence      (1-10) — Scene coherence, naturalness of blend
+#   preservation   (1-10) — Are non-edited elements intact?
+#   score          (1-10) — Overall quality
+# =============================================================================
+
+runtime:
+  num_workers: 4
+
+# =============================================================================
+# Scorer Definitions
+# =============================================================================
+scorers:
+  llm_judge_openai:
+    model:
+      base_url: "http://cnode1-002:8000/v1,http://cnode1-002:8001/v1,http://cnode1-002:8002/v1,http://cnode1-002:8003/v1,http://cnode1-002:8004/v1,http://cnode1-002:8005/v1,http://cnode1-002:8006/v1,http://cnode1-002:8007/v1"
+      model: "Qwen/Qwen3-Omni-30B-A3B-Captioner"
+    batch_size: 256
+    max_samples: 10000
+
+  llm_judge_caption_llm:
+    batch_size: 256
+    captioner:
+      base_url: "http://cnode1-002:8000/v1,http://cnode1-002:8001/v1,http://cnode1-002:8002/v1,http://cnode1-002:8003/v1,http://cnode1-002:8004/v1,http://cnode1-002:8005/v1,http://cnode1-002:8006/v1,http://cnode1-002:8007/v1"
+      model: "Qwen/Qwen3-Omni-30B-A3B-Captioner"
+    judge_model:
+      base_url: "http://cnode1-004:8000/v1,http://cnode1-006:8000/v1"
+      model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+      default_kwargs:
+        temperature: 0.2
+        max_tokens: 2048
+
+  llm_judge_gemini:
+    batch_size: 256
+    max_samples: 25
+    model_kwargs:
+      model: "gemini-2.5-flash-preview"
+
+  fad:
+    embedding: "encodec-emb"
+    device: "cuda"
+
+# =============================================================================
+# Shared Scorer Configurations — YAML Anchors
+# =============================================================================
+# NOTE: The `_anchors` key is ignored by the eval runner; it only serves as a
+#       home for YAML anchors that are referenced in the `tasks` section below.
+_anchors:
+
+  # ===========================================================================
+  #  ADD OPERATION
+  # ===========================================================================
+  add_scorers: &add_scorers
+    # --- Qwen3-Omni (audio → direct judge) ---
+    - name: llm_judge_openai
+      score_key: score
+      score_keys: [score, edit_fidelity, audio_quality, coherence, preservation]
+      audio_keys: [eval_audio_path]
+      decode_kwargs:
+        temperature: 0.1
+        max_tokens: 1024
+      system_prompt: |-
+        You are an expert audio evaluator. You will listen to a GENERATED audio
+        that was created by ADDING a new sound element onto an original audio
+        track. Both the original content and the added element should coexist
+        simultaneously in the result.
+
+        Evaluate the following dimensions:
+        1. edit_fidelity (0 or 1): Is the added element clearly audible in the
+           audio? 1 = present, 0 = absent.
+        2. audio_quality (1-10): Production quality — clarity, absence of
+           artifacts, distortion, or clipping.
+        3. coherence (1-10): Do the combined layers blend into a natural,
+           unified audio scene? (1 = jarring / artificial, 10 = seamless)
+        4. preservation (1-10): Are the original audio characteristics preserved
+           without degradation?
+        5. score (1-10): Holistic overall assessment.
+
+        Output ONLY valid JSON:
+        {"edit_fidelity": <0|1>, "audio_quality": <1-10>, "coherence": <1-10>, "preservation": <1-10>, "score": <1-10>, "reason": "<≤60 words>"}
+      user_prompt: |-
+        ## Edit Instruction
+        {{ edit_prompt }}
+
+        ## Original Audio Description (before the edit)
+        {{ audio_caption }}
+
+        ## Description of the Element Being Added
+        {{ add_audio_caption }}
+
+        Listen to the audio and evaluate how well the ADD operation was performed.
+
+    # --- Captioner + LLM Judge ---
+    - name: llm_judge_caption_llm
+      score_key: score
+      score_keys: [score, edit_fidelity, audio_quality, coherence, preservation]
+      system_prompt: |-
+        You are an expert audio edit evaluator. You will compare an automatic
+        caption of the generated audio against the expected description to
+        evaluate an ADD operation (layering a new element onto original audio).
+
+        Evaluate:
+        1. edit_fidelity (0 or 1): Does the caption indicate the added element
+           is present?
+        2. audio_quality (1-10): Based on the caption, does the audio seem
+           well-produced without artifacts?
+        3. coherence (1-10): Does the caption describe a coherent, unified
+           audio scene?
+        4. preservation (1-10): Does the caption indicate original elements are
+           preserved?
+        5. score (1-10): Overall quality.
+
+        Output ONLY valid JSON:
+        {"edit_fidelity": <0|1>, "audio_quality": <1-10>, "coherence": <1-10>, "preservation": <1-10>, "score": <1-10>, "reason": "<≤60 words>"}
+      user_prompt: |-
+        ## Edit Instruction
+        {{ edit_prompt }}
+
+        ## Original Audio Description
+        {{ audio_caption }}
+
+        ## Element That Was Added
+        {{ add_audio_caption }}
+
+        ## Generated Audio Caption (automatic captioner output)
+        {{ target_caption_gen_now }}
+
+        ## Expected Audio Description (reference)
+        {{ target_audio_caption }}
+
+        Evaluate whether the ADD edit was successfully applied.
+
+    # --- Gemini (audio → direct judge) ---
+    - name: llm_judge_gemini
+      score_key: score
+      score_keys: [score, edit_fidelity, audio_quality, coherence, preservation]
+      audio_keys: [eval_audio_path]
+      user_prompt: |-
+        Listen to the audio carefully. This audio was created by performing an
+        ADD operation — layering a new sound element onto an original audio
+        track.
+
+        ## Edit Instruction
+        {{ edit_prompt }}
+
+        ## Original Audio Description
+        {{ audio_caption }}
+
+        ## Element That Was Added
+        {{ add_audio_caption }}
+
+        Evaluate:
+        1. edit_fidelity (0 or 1): Is the added element clearly audible?
+        2. audio_quality (1-10): Production quality, clarity, absence of
+           artifacts / distortion.
+        3. coherence (1-10): Do the layers blend naturally into a unified
+           scene?
+        4. preservation (1-10): Are original elements preserved without
+           degradation?
+        5. score (1-10): Overall quality.
+
+        Output ONLY valid JSON:
+        {"edit_fidelity": <0|1>, "audio_quality": <1-10>, "coherence": <1-10>, "preservation": <1-10>, "score": <1-10>, "reason": "<≤60 words>"}
+
+    # --- FAD (corpus-level audio quality) ---
+    - name: fad
+
+  # ===========================================================================
+  #  REMOVE OPERATION
+  # ===========================================================================
+  remove_scorers: &remove_scorers
+    # --- Qwen3-Omni ---
+    - name: llm_judge_openai
+      score_key: score
+      score_keys: [score, edit_fidelity, audio_quality, coherence, preservation]
+      audio_keys: [eval_audio_path]
+      decode_kwargs:
+        temperature: 0.1
+        max_tokens: 1024
+      system_prompt: |-
+        You are an expert audio evaluator. You will listen to a GENERATED audio
+        from which a specific sound element should have been REMOVED. The
+        removed element should be completely absent, while all other content
+        should remain intact.
+
+        Evaluate the following dimensions:
+        1. edit_fidelity (0 or 1): Is the element that should be removed
+           actually absent from the audio? 1 = successfully removed, 0 = still
+           audible.
+        2. audio_quality (1-10): Production quality — check for removal
+           artifacts such as spectral holes, phase issues, clicks, or unnatural
+           silences.
+        3. coherence (1-10): Does the remaining audio sound complete and
+           natural, not hollow, broken, or missing content?
+        4. preservation (1-10): Are elements that should remain preserved
+           intact, without collateral damage from the removal process?
+        5. score (1-10): Holistic overall assessment.
+
+        Output ONLY valid JSON:
+        {"edit_fidelity": <0|1>, "audio_quality": <1-10>, "coherence": <1-10>, "preservation": <1-10>, "score": <1-10>, "reason": "<≤60 words>"}
+      user_prompt: |-
+        ## Edit Instruction
+        {{ edit_prompt }}
+
+        ## Original Audio Description (before removal — contains the element)
+        {{ audio_caption }}
+
+        ## Element That Should Be Removed
+        {{ remove_audio_caption }}
+
+        Listen to the audio and evaluate how well the REMOVE operation was performed.
+
+    # --- Captioner + LLM Judge ---
+    - name: llm_judge_caption_llm
+      score_key: score
+      score_keys: [score, edit_fidelity, audio_quality, coherence, preservation]
+      system_prompt: |-
+        You are an expert audio edit evaluator. You will compare an automatic
+        caption of the generated audio against the expected description to
+        evaluate a REMOVE operation (removing a specific element from audio).
+
+        Evaluate:
+        1. edit_fidelity (0 or 1): Does the generated caption indicate the
+           element is gone? Check that sounds described in "Element That Should
+           Be Removed" do NOT appear in the generated caption.
+        2. audio_quality (1-10): Does the caption suggest clean removal without
+           artifacts?
+        3. coherence (1-10): Does the remaining audio description sound
+           complete and natural?
+        4. preservation (1-10): Are non-removed elements described as intact?
+        5. score (1-10): Overall quality.
+
+        Output ONLY valid JSON:
+        {"edit_fidelity": <0|1>, "audio_quality": <1-10>, "coherence": <1-10>, "preservation": <1-10>, "score": <1-10>, "reason": "<≤60 words>"}
+      user_prompt: |-
+        ## Edit Instruction
+        {{ edit_prompt }}
+
+        ## Original Audio Description (before removal)
+        {{ audio_caption }}
+
+        ## Element That Should Be Removed
+        {{ remove_audio_caption }}
+
+        ## Generated Audio Caption (automatic captioner output)
+        {{ target_caption_gen_now }}
+
+        ## Expected Audio Description (after removal — reference)
+        {{ target_audio_caption }}
+
+        Evaluate whether the REMOVE edit was successfully applied.
+
+    # --- Gemini ---
+    - name: llm_judge_gemini
+      score_key: score
+      score_keys: [score, edit_fidelity, audio_quality, coherence, preservation]
+      audio_keys: [eval_audio_path]
+      user_prompt: |-
+        Listen to the audio carefully. This audio was created by REMOVING a
+        specific sound element from the original audio track.
+
+        ## Edit Instruction
+        {{ edit_prompt }}
+
+        ## Original Audio Description (before removal)
+        {{ audio_caption }}
+
+        ## Element That Should Have Been Removed
+        {{ remove_audio_caption }}
+
+        Evaluate:
+        1. edit_fidelity (0 or 1): Is the element that should be removed
+           actually absent? 1 = removed, 0 = still present.
+        2. audio_quality (1-10): Quality — check for removal artifacts (holes,
+           clicks, phase issues).
+        3. coherence (1-10): Does the remaining audio sound complete and
+           natural?
+        4. preservation (1-10): Are non-removed elements preserved intact?
+        5. score (1-10): Overall quality.
+
+        Output ONLY valid JSON:
+        {"edit_fidelity": <0|1>, "audio_quality": <1-10>, "coherence": <1-10>, "preservation": <1-10>, "score": <1-10>, "reason": "<≤60 words>"}
+
+    # --- FAD ---
+    - name: fad
+
+  # ===========================================================================
+  #  REPLACE OPERATION
+  # ===========================================================================
+  replace_scorers: &replace_scorers
+    # --- Qwen3-Omni ---
+    - name: llm_judge_openai
+      score_key: score
+      score_keys: [score, edit_fidelity, audio_quality, coherence, preservation]
+      audio_keys: [eval_audio_path]
+      decode_kwargs:
+        temperature: 0.1
+        max_tokens: 1024
+      system_prompt: |-
+        You are an expert audio evaluator. You will listen to a GENERATED audio
+        where one sound element was REPLACED with another. The old element
+        should be absent, the new element should be present, and all other
+        content should remain intact.
+
+        Evaluate the following dimensions:
+        1. edit_fidelity (0 or 1): Was the old element removed AND the new
+           element successfully added? 1 = swap successful, 0 = incomplete or
+           failed.
+        2. audio_quality (1-10): Production quality — clarity, absence of
+           artifacts, distortion, or crossfade issues.
+        3. coherence (1-10): Does the new combination of elements sound
+           natural and well-blended? Is the replacement seamlessly integrated?
+        4. preservation (1-10): Are unchanged elements (the persistent audio
+           content) preserved intact without collateral modification?
+        5. score (1-10): Holistic overall assessment.
+
+        Output ONLY valid JSON:
+        {"edit_fidelity": <0|1>, "audio_quality": <1-10>, "coherence": <1-10>, "preservation": <1-10>, "score": <1-10>, "reason": "<≤60 words>"}
+      user_prompt: |-
+        ## Edit Instruction
+        {{ edit_prompt }}
+
+        ## Original Audio Description (before replacement)
+        {{ audio_caption }}
+
+        ## Element That Was Removed (old)
+        {{ remove_audio_caption }}
+
+        ## Element That Was Added (new)
+        {{ add_audio_caption }}
+
+        Listen to the audio and evaluate how well the REPLACE operation was performed.
+
+    # --- Captioner + LLM Judge ---
+    - name: llm_judge_caption_llm
+      score_key: score
+      score_keys: [score, edit_fidelity, audio_quality, coherence, preservation]
+      system_prompt: |-
+        You are an expert audio edit evaluator. You will compare an automatic
+        caption of the generated audio against the expected description to
+        evaluate a REPLACE operation (swapping one sound element for another).
+
+        Evaluate:
+        1. edit_fidelity (0 or 1): Does the caption indicate the old element
+           is gone AND the new element is present?
+        2. audio_quality (1-10): Does the caption suggest good production
+           quality?
+        3. coherence (1-10): Does the described scene sound coherent with the
+           new element integrated?
+        4. preservation (1-10): Are unchanged elements described as intact?
+        5. score (1-10): Overall quality.
+
+        Output ONLY valid JSON:
+        {"edit_fidelity": <0|1>, "audio_quality": <1-10>, "coherence": <1-10>, "preservation": <1-10>, "score": <1-10>, "reason": "<≤60 words>"}
+      user_prompt: |-
+        ## Edit Instruction
+        {{ edit_prompt }}
+
+        ## Original Audio Description (before replacement)
+        {{ audio_caption }}
+
+        ## Element That Was Removed (old)
+        {{ remove_audio_caption }}
+
+        ## Element That Was Added (new)
+        {{ add_audio_caption }}
+
+        ## Generated Audio Caption (automatic captioner output)
+        {{ target_caption_gen_now }}
+
+        ## Expected Audio Description (after replacement — reference)
+        {{ target_audio_caption }}
+
+        Evaluate whether the REPLACE edit was successfully applied.
+
+    # --- Gemini ---
+    - name: llm_judge_gemini
+      score_key: score
+      score_keys: [score, edit_fidelity, audio_quality, coherence, preservation]
+      audio_keys: [eval_audio_path]
+      user_prompt: |-
+        Listen to the audio carefully. This audio was created by REPLACING one
+        sound element with another within the original audio track.
+
+        ## Edit Instruction
+        {{ edit_prompt }}
+
+        ## Original Audio Description (before replacement)
+        {{ audio_caption }}
+
+        ## Element That Was Removed (old)
+        {{ remove_audio_caption }}
+
+        ## Element That Was Added (new)
+        {{ add_audio_caption }}
+
+        Evaluate:
+        1. edit_fidelity (0 or 1): Was the old element removed AND the new
+           element added? 1 = swap successful, 0 = failed.
+        2. audio_quality (1-10): Production quality, artifacts, distortion.
+        3. coherence (1-10): Does the new combination sound natural and
+           well-integrated?
+        4. preservation (1-10): Are unchanged elements preserved?
+        5. score (1-10): Overall quality.
+
+        Output ONLY valid JSON:
+        {"edit_fidelity": <0|1>, "audio_quality": <1-10>, "coherence": <1-10>, "preservation": <1-10>, "score": <1-10>, "reason": "<≤60 words>"}
+
+    # --- FAD ---
+    - name: fad
+
+  # ===========================================================================
+  #  CREATIVE EDIT (gen_v3 style — freeform audio transformation)
+  # ===========================================================================
+  creative_scorers: &creative_scorers
+    # --- Qwen3-Omni ---
+    - name: llm_judge_openai
+      score_key: score
+      score_keys: [score, edit_fidelity, audio_quality, creativity, coherence]
+      audio_keys: [eval_audio_path]
+      decode_kwargs:
+        temperature: 0.1
+        max_tokens: 1024
+      system_prompt: |-
+        You are an expert audio evaluator. You will listen to a GENERATED audio
+        that was created by applying a CREATIVE EDIT to an original audio based
+        on a natural-language instruction. The edit may transform the scene,
+        mood, genre, setting, or any other acoustic aspect.
+
+        Evaluate the following dimensions:
+        1. edit_fidelity (0 or 1): Does the audio reflect the requested
+           creative edit? 1 = the described transformation is evident,
+           0 = no meaningful change or wrong transformation.
+        2. audio_quality (1-10): Production quality — clarity, naturalness,
+           absence of artifacts.
+        3. creativity (1-10): How interesting, vivid, and creative is the
+           result? Does it go beyond the obvious?
+        4. coherence (1-10): Does the resulting audio form a plausible,
+           self-consistent audio scene?
+        5. score (1-10): Holistic overall assessment.
+
+        Output ONLY valid JSON:
+        {"edit_fidelity": <0|1>, "audio_quality": <1-10>, "creativity": <1-10>, "coherence": <1-10>, "score": <1-10>, "reason": "<≤60 words>"}
+      user_prompt: |-
+        ## Edit Instruction
+        {{ edit_prompt }}
+
+        ## Original Audio Description (before the creative edit)
+        {{ source_caption }}
+
+        ## Expected Result Description
+        {{ target_caption }}
+
+        Listen to the audio and evaluate how well the creative edit was applied.
+
+    # --- Captioner + LLM Judge ---
+    - name: llm_judge_caption_llm
+      score_key: score
+      score_keys: [score, edit_fidelity, audio_quality, creativity, coherence]
+      system_prompt: |-
+        You are an expert audio edit evaluator. Compare an automatic caption of
+        the generated audio against the expected description to evaluate a
+        CREATIVE EDIT operation (freeform audio transformation).
+
+        Evaluate:
+        1. edit_fidelity (0 or 1): Does the generated caption reflect the
+           requested transformation?
+        2. audio_quality (1-10): Does the caption suggest good audio quality?
+        3. creativity (1-10): Is the described result creative and vivid?
+        4. coherence (1-10): Does the description form a plausible audio scene?
+        5. score (1-10): Overall quality.
+
+        Output ONLY valid JSON:
+        {"edit_fidelity": <0|1>, "audio_quality": <1-10>, "creativity": <1-10>, "coherence": <1-10>, "score": <1-10>, "reason": "<≤60 words>"}
+      user_prompt: |-
+        ## Edit Instruction
+        {{ edit_prompt }}
+
+        ## Original Audio Description
+        {{ source_caption }}
+
+        ## Generated Audio Caption (automatic captioner output)
+        {{ target_caption_gen_now }}
+
+        ## Expected Audio Description
+        {{ target_caption }}
+
+        Evaluate whether the creative edit was successfully applied.
+
+    # --- Gemini ---
+    - name: llm_judge_gemini
+      score_key: score
+      score_keys: [score, edit_fidelity, audio_quality, creativity, coherence]
+      audio_keys: [eval_audio_path]
+      user_prompt: |-
+        Listen to the audio carefully. This audio was created by applying a
+        CREATIVE EDIT — a freeform transformation based on a natural-language
+        instruction.
+
+        ## Edit Instruction
+        {{ edit_prompt }}
+
+        ## Original Audio Description
+        {{ source_caption }}
+
+        ## Expected Result Description
+        {{ target_caption }}
+
+        Evaluate:
+        1. edit_fidelity (0 or 1): Does the audio reflect the requested
+           creative transformation? 1 = yes, 0 = no.
+        2. audio_quality (1-10): Production quality, naturalness, artifacts.
+        3. creativity (1-10): How interesting and vivid is the result?
+        4. coherence (1-10): Does the audio form a plausible, self-consistent
+           scene?
+        5. score (1-10): Overall quality.
+
+        Output ONLY valid JSON:
+        {"edit_fidelity": <0|1>, "audio_quality": <1-10>, "creativity": <1-10>, "coherence": <1-10>, "score": <1-10>, "reason": "<≤60 words>"}
+
+    # --- FAD ---
+    - name: fad
+
+
+# =============================================================================
+# Tasks — one entry per edit_type
+# =============================================================================
+# Each task references a shared scorer list via YAML anchor.
+# Tasks without matching data in the metadata/scp are silently skipped.
+
+tasks:
+  # ===========================
+  #  ADD tasks
+  # ===========================
+  music_add_music:    { scorers: *add_scorers }
+  music_add_sound:    { scorers: *add_scorers }
+  music_add_speech:   { scorers: *add_scorers }
+  sound_add_music:    { scorers: *add_scorers }
+  sound_add_sound:    { scorers: *add_scorers }
+  sound_add_speech:   { scorers: *add_scorers }
+  speech_add_music:   { scorers: *add_scorers }
+  speech_add_sound:   { scorers: *add_scorers }
+  speech_add_speech:  { scorers: *add_scorers }
+
+  # ===========================
+  #  REMOVE tasks
+  # ===========================
+  music_remove_music:    { scorers: *remove_scorers }
+  music_remove_sound:    { scorers: *remove_scorers }
+  music_remove_speech:   { scorers: *remove_scorers }
+  sound_remove_music:    { scorers: *remove_scorers }
+  sound_remove_sound:    { scorers: *remove_scorers }
+  sound_remove_speech:   { scorers: *remove_scorers }
+  speech_remove_music:   { scorers: *remove_scorers }
+  speech_remove_sound:   { scorers: *remove_scorers }
+  speech_remove_speech:  { scorers: *remove_scorers }
+
+  # ===========================
+  #  REPLACE tasks
+  # ===========================
+  music_replace_music:    { scorers: *replace_scorers }
+  music_replace_sound:    { scorers: *replace_scorers }
+  music_replace_speech:   { scorers: *replace_scorers }
+  sound_replace_music:    { scorers: *replace_scorers }
+  sound_replace_sound:    { scorers: *replace_scorers }
+  sound_replace_speech:   { scorers: *replace_scorers }
+  speech_replace_music:   { scorers: *replace_scorers }
+  speech_replace_sound:   { scorers: *replace_scorers }
+  speech_replace_speech:  { scorers: *replace_scorers }
+
+  # ===========================
+  #  CREATIVE EDIT tasks (gen_v3 style)
+  #  — edit_type comes from the creative edit pool
+  # ===========================
+  scene_transform:       { scorers: *creative_scorers }
+  background_replace:    { scorers: *creative_scorers }
+  weather_change:        { scorers: *creative_scorers }
+  spatial_transform:     { scorers: *creative_scorers }
+  time_of_day_shift:     { scorers: *creative_scorers }
+  location_teleport:     { scorers: *creative_scorers }
+  season_shift:          { scorers: *creative_scorers }
+  activity_shift:        { scorers: *creative_scorers }
+  genre_morph:           { scorers: *creative_scorers }
+  instrument_swap:       { scorers: *creative_scorers }
+  voice_transform:       { scorers: *creative_scorers }
+  language_shift:        { scorers: *creative_scorers }
+  species_swap:          { scorers: *creative_scorers }
+  action_reversal:       { scorers: *creative_scorers }
+  formality_shift:       { scorers: *creative_scorers }
+  mood_shift:            { scorers: *creative_scorers }
+  energy_change:         { scorers: *creative_scorers }
+  tempo_change:          { scorers: *creative_scorers }
+  tension_arc:           { scorers: *creative_scorers }
+  comedic_twist:         { scorers: *creative_scorers }
+  element_addition:      { scorers: *creative_scorers }
+  element_removal:       { scorers: *creative_scorers }
+  participant_change:    { scorers: *creative_scorers }
+  semantic_rewrite:      { scorers: *creative_scorers }
+  narrative_extension:   { scorers: *creative_scorers }
+  crowd_scaling:         { scorers: *creative_scorers }
+  perspective_shift:     { scorers: *creative_scorers }
+  interruption:          { scorers: *creative_scorers }
+  foley_reimagine:       { scorers: *creative_scorers }
+  quality_transform:     { scorers: *creative_scorers }
+  era_shift:             { scorers: *creative_scorers }
+  cultural_transform:    { scorers: *creative_scorers }
+  medium_change:         { scorers: *creative_scorers }
+  style_transfer:        { scorers: *creative_scorers }
+  film_genre_filter:     { scorers: *creative_scorers }
+  age_regression:        { scorers: *creative_scorers }
+  mechanisation:         { scorers: *creative_scorers }
+  underwater_filter:     { scorers: *creative_scorers }
+  dream_distortion:      { scorers: *creative_scorers }

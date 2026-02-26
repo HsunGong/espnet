@@ -23,7 +23,7 @@ class VolumeLoudnessScorer(BaseScorer):
         return value
 
     def __init__(self, *, name: str, delta_tolerance_db: float = 3.0, **kwargs: Any) -> None:
-        super().__init__(name=name)
+        super().__init__(name=name, **kwargs)
         self.delta_tolerance_db = delta_tolerance_db
 
     def _extract_volume_factor(self, sample: dict[str, Any]) -> float | None:

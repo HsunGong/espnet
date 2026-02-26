@@ -68,7 +68,7 @@ class PseudoMOSScorer(BaseScorer):
         singmos_hub_repo: str = "South-Twilight/SingMOS:v1.1.1",
         **kwargs: Any,
     ) -> None:
-        super().__init__(name=name)
+        super().__init__(name=name, **kwargs)
         self.use_gpu = use_gpu
         self.cache_dir = cache_dir
         self.predictor_types_default = predictor_types or ["utmosv2"]

@@ -27,7 +27,7 @@ class EmotionModelscopeScorer(BaseScorer):
         gen_kwargs: dict = {},
         **kwargs: Any,
     ) -> None:
-        super().__init__(name=model)
+        super().__init__(name=name, **kwargs)
         self.gen_kwargs = gen_kwargs
 
         ourlabels =  ['happy', 'angry', 'sad', 'humour', 'confusion', 'disgusted', 'empathy', 'embarrass', 'fear', 'surprised', 'excited', 'depressed', 'coldness', 'admiration']

@@ -12,7 +12,7 @@ from .base import safe_mean, BaseScorer
 class SpeakerSimilarityWespeakerScorer(BaseScorer):
     """Speaker similarity scorer using WeSpeaker batch embedding extraction."""
 
-    score_keys = ["score", "similarity"]
+    score_keys = ["score", "sim"]
 
     def __init__(
         self,
@@ -23,7 +23,7 @@ class SpeakerSimilarityWespeakerScorer(BaseScorer):
         batch_size: int = 32,
         **kwargs: Any,
     ) -> None:
-        super().__init__(name=name)
+        super().__init__(name=name, **kwargs)
         self.batch_size = batch_size
 
         if device.startswith("cuda") and not torch.cuda.is_available():
@@ -120,7 +120,7 @@ class SpeakerSimilarityWespeakerScorer(BaseScorer):
                         score=cos_score,
                         valid=True,
                         reason=f"sim={sim:.4f}",
-                        extra={"similarity": sim},
+                        extra={"sim": sim},
                     )
                 )
             except Exception as exc:
@@ -135,5 +135,5 @@ class SpeakerSimilarityWespeakerScorer(BaseScorer):
                 )
 
         rows, summary = self.finalize(rows)
-        summary["avg_similarity"] = safe_mean(sims)
+        summary["avg_sim"] = safe_mean(sims)
         return rows, summary

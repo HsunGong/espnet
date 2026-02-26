@@ -13,6 +13,9 @@ import numpy as np
 import soundfile as sf
 from joblib import Parallel, delayed
 from tqdm import tqdm
+import random
+
+random.seed(7)
 
 # ---------------------------------------------------------------------------
 # CosyVoice3 supported paralinguistic tokens
@@ -49,11 +52,11 @@ PARA_TAG_MAP = {
     "[snort]":               "[hissing]",
     "[cough]":               "[cough]",
     "[uhm]":                 "[mn]",
-    "[Surprise-oh]":         "[vocalized-noise]",
-    "[Surprise-wa]":         "[vocalized-noise]",
-    "[Dissatisfaction-hnn]": "[mn]",
-    "[Question-ah]":         "[vocalized-noise]",
-    "[Question-yi]":         "[vocalized-noise]",
+    "[Surprise-oh]":         "oh!",
+    "[Surprise-wa]":         "wa!",
+    "[Dissatisfaction-hnn]": "hmm",
+    "[Question-ah]":         "ah?",
+    "[Question-yi]":         "yi?",
 }
 
 STYLE_INSTRUCTION = {
@@ -112,10 +115,19 @@ def map_jsonl_to_zero_shot_payload(data: dict):
         instruction = STYLE_INSTRUCTION.get(style, f"Speak in a {style} style.")
     elif edit_type == "style_emotion":
         emotion = kwargs.get("style", "happy")
-        instruction = EMOTION_INSTRUCTION.get(emotion, f"Speak with {emotion}.")
+        instruction = EMOTION_INSTRUCTION.get(emotion, f"Speak with {emotion} emotion.")
     elif edit_type == "audio_effect_speed":
         rate = float(kwargs.get("speed_rate", 1.0))
-        instruction = f"Speak at speed rate {rate}." # 简化描述
+        rate = kwargs.get("speed_rate", 1.0)
+        if rate >= 1.5:
+            step_edit_info = "more faster"
+        elif rate > 1.0:
+            step_edit_info = "faster"
+        elif rate <= 0.8:
+            step_edit_info = "more slower"
+        else:
+            step_edit_info = "slower"
+        instruction = f"Speak {step_edit_info}."
 
     # 2. 构造符合 Zero-Shot 格式的 Prompt
     # 格式通常为: 指令(可选) + 参考文本 + <|endofprompt|> + 目标文本
@@ -126,10 +138,10 @@ def map_jsonl_to_zero_shot_payload(data: dict):
     final_target_text = map_paralinguistic_tokens(target_text)
 
     payload = {
-        "tts_text": final_target_text,
         "prompt_text": full_prompt_text,
+        "tts_text": final_target_text,
         "stream": False,
-        "tts_model_name": "default"
+        "tts_model_name": "null"
     }
 
     return payload, prompt_wav
@@ -140,32 +152,42 @@ def map_jsonl_to_zero_shot_payload(data: dict):
 
 def process_single_task(data: dict, host_url: str, save_dir: str, sample_rate: int):
     utt_id = data["id"]
-    save_audio_path = os.path.join(save_dir, f"{utt_id}.wav")
+    host_urls = host_url.split(",")
+    host_url = random.choice(host_urls)  # 随机选择一个服务器实例进行负载均衡
+    save_audio_path = os.path.abspath(os.path.join(save_dir, f"{utt_id}.wav"))
 
     payload, prompt_wav = map_jsonl_to_zero_shot_payload(data)
 
     if not os.path.exists(prompt_wav):
         return utt_id, False, save_audio_path, f"Prompt audio not found: {prompt_wav}"
 
+    if sf.info(prompt_wav).duration > 30:
+        return utt_id, False, save_audio_path, f"Prompt audio too long (<=30s): {sf.info(prompt_wav).duration:.2f}s"
+
     try:
-        with open(prompt_wav, "rb") as f:
-            files = {"prompt_wav": f}
-            # 统一调用 inference_zero_shot
-            response = requests.post(
-                f"{host_url.rstrip('/')}/inference_zero_shot", 
-                files=files, 
-                data=payload, 
-                timeout=60
-            )
+        # print(f"[Request] {utt_id}: {prompt_wav} save to {save_audio_path}")
+        if os.path.exists(save_audio_path):
+            # print(f"[Warning] Output already exists for {utt_id}, skipping API call.")
+            return utt_id, True, save_audio_path, "Already exists"
 
-        if response.status_code != 200:
-            return utt_id, False, save_audio_path, f"API Error {response.status_code}"
+        files = {"prompt_wav": open(prompt_wav, "rb")}
+        # 统一调用 inference_zero_shot
+        response = requests.post(
+            f"{host_url}/inference_zero_shot",
+            files=files, 
+            data=payload,
+            stream=True
+        )
 
-        audio_np = np.frombuffer(response.content, dtype=np.int16)
-        if audio_np.size == 0:
-            return utt_id, False, save_audio_path, "Empty audio returned"
-            
-        sf.write(save_audio_path, audio_np, samplerate=sample_rate, subtype="PCM_16")
+        # Collect audio data
+        audio_data = bytearray()
+        for chunk in tqdm(response.iter_content(chunk_size=4096), desc=f"Processing {utt_id}", leave=True, disable=True):
+            if chunk:
+                audio_data.extend(chunk)
+
+        audio_np = np.frombuffer(audio_data, dtype=np.int16)
+        sf.write(save_audio_path, audio_np, samplerate=24000, subtype="PCM_16")
+        tqdm.write(f"Save at {save_audio_path}")
         return utt_id, True, save_audio_path, "Success"
 
     except Exception as exc:
@@ -177,7 +199,7 @@ def process_single_task(data: dict, host_url: str, save_dir: str, sample_rate: i
 
 def get_args():
     parser = argparse.ArgumentParser(description="Concurrent CosyVoice3 client using Joblib")
-    parser.add_argument("--host", type=str, default="http://localhost:8000", help="CosyVoice API host URL")
+    parser.add_argument("--host", type=str, default="http://localhost:8000,http://localhost:8001,http://localhost:8002,http://localhost:8003,http://localhost:8004,http://localhost:8005,http://localhost:8006,http://localhost:8007", help="CosyVoice API host URL")
     parser.add_argument("--jsonl-files", type=str, nargs="+", required=True, help="Input JSONL files")
     parser.add_argument("--output-dir", type=str, required=True, help="Output directory")
     parser.add_argument("--num-workers", type=int, default=128, help="Number of concurrent requests")
@@ -194,7 +216,7 @@ def process_jsonl():
 
     for jsonl_file in args.jsonl_files:
         if not os.path.exists(jsonl_file):
-            print(f"[Warning] File not found: {jsonl_file}")
+            # print(f"[Warning] File not found: {jsonl_file}")
             continue
 
         file_stem = Path(jsonl_file).stem
@@ -217,13 +239,13 @@ def process_jsonl():
                     print(f"[Error] JSONDecodeError at line {line_idx}. Skipped.")
 
         # 2. Execute concurrently using Joblib with TQDM progress bar
-        # return_as="generator" allows tqdm to update as soon as a worker finishes
-        parallel_executor = Parallel(n_jobs=args.num_workers, return_as="generator", prefer="threads")
+        # return_as="generator_unordered" allows tqdm to update as soon as a worker finishes
+        parallel_executor = Parallel(n_jobs=args.num_workers, return_as="generator_unordered", prefer="threads")
 
         # 3. Write results to SCP file
         success_count = 0
         with open(scp_path, "w", encoding="utf-8") as fscp:
-            pbar = tqdm(total=len(tasks), desc=f"Processing {file_stem}", unit="task")
+            pbar = tqdm(total=len(tasks), desc=f"Processing {file_stem}")
             for res in parallel_executor(
                 delayed(process_single_task)(task, args.host, save_dir, args.sample_rate)
                 for task in tasks

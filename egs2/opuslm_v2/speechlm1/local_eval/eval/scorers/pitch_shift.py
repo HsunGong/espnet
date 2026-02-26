@@ -28,7 +28,7 @@ class PitchShiftScorer(BaseScorer):
         return float(12.0 * np.log2(f0_b / f0_a))
 
     def __init__(self, *, name: str, semitone_tolerance: float = 1.0, **kwargs: Any) -> None:
-        super().__init__(name=name)
+        super().__init__(name=name, **kwargs)
         self.semitone_tolerance = semitone_tolerance
 
     def _extract_semitones(self, sample: dict[str, Any]) -> float | None:

@@ -1,0 +1,348 @@
+# set global MAX_DURATION
+vllm:
+  url: "http://cnode1-001:8000/v1,http://cnode1-001:8000/v1,http://cnode1-001:8000/v1,http://cnode1-004:8000/v1,http://cnode1-006:8000/v1"
+  model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+  max_tokens: 4096
+  temperature: 0.7
+
+captioner:
+  url: "http://cnode1-010:9000/v1"
+  model: "Qwen/Qwen3-Omni-30B-A3B-Captioner"
+
+judge:
+  url: "http://cnode1-001:8000/v1,http://cnode1-004:8000/v1,http://cnode1-006:8000/v1"
+  model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+  max_tokens: 4096
+  temperature: 0.2
+
+transcription_ins:
+  words_range: [1, 5]
+  system_prompt: |-
+    You are an expert audio transcription and caption editor.
+
+    HARD CONSTRAINTS (MUST FOLLOW):
+    0) You may ONLY add words AND their necessary accompanying punctuation. You MUST NOT delete, substitute, or reorder ANY existing word tokens. 
+       - Minor adjustments to spacing, punctuation, and capitalization to maintain fluency are ALLOWED and ENCOURAGED.
+    1) Use EXACTLY 1 or 2 insertion locations total (not 3+).
+    2) SYNTAX & WORD ORDER (CRITICAL):
+       - The final sentence MUST be strictly grammatical and natural in English.
+       - NEVER separate tightly bound grammatical units (e.g., NEVER insert an adverb like "gently" between a transitive verb and its direct object, like "prodded gently him". Put it before the verb or after the object).
+    3) PUNCTUATION & GRAMMAR BUNDLING (CRITICAL):
+       - If fluency requires an article, preposition, or PUNCTUATION (like a comma), you MUST include it inside the inserted phrase. 
+       - Example: If inserting "please" into the list "like, share", insert ", please" or "please," so the final text retains proper comma separation.
+
+    TASK:
+    Step 1 — Think and Draft ("draft_text").
+    - Mentally construct the full new sentence to ensure word order and punctuation are perfect.
+    
+    Step 2 — Write a precise edit operation.
+    - Format strictly as: "Insert '<PHRASE_1>' between '<LEFT_1>' and '<RIGHT_1>'"
+    - <LEFT> and <RIGHT> MUST appear verbatim in the original transcription.
+
+    Step 3 — Produce new_asr_text.
+    - Apply the edit. Adjust punctuation and capitalization if necessary.
+
+    Step 4 — Produce new_caption.
+    - ZERO HALLUCINATION: Only describe what is supported by new_asr_text.
+    - NO META-COMMENTARY: NEVER state "the sentence is grammatical" or comment on the structure. Just describe the audio naturally.
+    - Style Match: Mirror the original audio caption.
+
+    OUTPUT:
+    Return ONLY valid JSON with exactly these keys:
+    {
+      "draft_text": "<your internal preview of the final sentence>",
+      "edit_operation": "<concise command>",
+      "new_asr_text": "<the modified transcription>",
+      "new_caption": "<the completely new, hallucination-free caption>"
+    }
+  user_prompt: |-
+    ## Original Transcription:
+    {{ text }}
+
+    ## Original Audio Caption:
+    {{ audio_caption }}
+
+    ## Instruction:
+    Insert at least {{ min_w }} words and at most {{ max_w }} words into the original transcription.
+    Use exactly 1 or 2 insertion locations total.
+    Do NOT change any existing word tokens (punctuation/capitalization adjustments are fine).
+    The final sentence must be strictly grammatical and natural.
+
+  judge_system_prompt: |-
+    You are an expert evaluator.
+
+    You MUST verify THREE things:
+
+    (A) Alignment (FLEXIBLE ON PUNCTUATION):
+      - new_text MUST preserve the original word tokens EXACTLY, except for the inserted phrases.
+      - EXCEPTION: Changes to punctuation (adding/removing commas) and capitalization are FULLY ALLOWED if they improve fluency. Do not fail alignment for punctuation differences.
+
+    (B) Fluency & Word Order (STRICT):
+      - new_text must be strictly grammatical and natural in English.
+      - Reject ungrammatical word order IMMEDIATELY (e.g., adverbs incorrectly separating verbs and objects, missing required articles).
+
+    (C) Caption Validation (STRICT):
+      1) ZERO hallucination: new_caption must be fully supported by new_text.
+      2) NO META-COMMENTARY: The caption MUST NOT evaluate the grammar, fluency, or correctness of the sentence.
+      3) Style must match the original_caption.
+
+    Return ONLY valid JSON:
+    {"valid": true/false, "reason": "Concrete. Mention exact alignment (ignoring punctuation), fluency, and caption issues."}
+
+  judge_user_prompt: |-
+    ## Original Text:
+    {{ original_text }}
+
+    ## Original Audio Caption:
+    {{ original_caption }}
+
+    ## Edit Operation Applied:
+    {{ edit_operation }}
+
+    ## Modified Text:
+    {{ new_text }}
+
+    ## Modified Audio Caption:
+    {{ new_caption }}
+
+
+transcription_del:
+  words_range: [1, 5]
+  system_prompt: |-
+    You are an expert audio transcription and caption editor.
+
+    HARD CONSTRAINTS (MUST FOLLOW):
+    0) You may ONLY delete word tokens that already exist. You MUST NOT add, substitute, or reorder any remaining words.
+       - Minor adjustments to punctuation and capitalization are ALLOWED (e.g., capitalizing a new first word, removing orphaned commas).
+    1) Use EXACTLY 1 or 2 deletion chunks total. Each chunk MUST be a contiguous span copied verbatim.
+       - WHOLE UNITS ONLY: Always delete entire grammatical units (e.g., complete prepositional phrases, complete adjective-noun pairs). DO NOT leave dangling articles or prepositions (e.g., deleting "strong" from "a strong source" leaves "a source", which is okay, but deleting "a strong" leaves "is source", which is BAD grammar).
+    2) After deletion, the new text MUST remain:
+       - strictly grammatical and natural in English,
+       - with at least 3 words remaining.
+       - Note: If the ORIGINAL text is a fragment, your deletion must still leave it as a grammatically plausible phrase. IF A DELETION CAUSES BAD GRAMMAR, CHOOSE A DIFFERENT SPAN.
+
+    TASK:
+    Step 1 — Think and Draft ("draft_text").
+    - Mentally construct the final sentence to ensure no orphaned words or weird grammar remain.
+    
+    Step 2 — Write edit_operation.
+    - Format strictly as: "Delete '<PHRASE_1>'"
+
+    Step 3 — Produce new_asr_text.
+    - Apply deletions. Fix capitalization for the first letter if the original start was deleted.
+
+    Step 4 — Produce new_caption.
+    - ZERO HALLUCINATION: Describe ONLY what remains.
+    - NO EDIT METADATA: Do not mention deletion/removal.
+    - Style Match: Mirror the original audio caption.
+
+    OUTPUT:
+    Return ONLY valid JSON with exactly these keys:
+    {
+      "draft_text": "<your internal preview of the final sentence>",
+      "edit_operation": "<concise command>",
+      "new_asr_text": "<the modified transcription>",
+      "new_caption": "<the new, hallucination-free caption>"
+    }
+
+  user_prompt: |-
+    ## Original Transcription:
+    {{ text }}
+
+    ## Original Audio Caption:
+    {{ audio_caption }}
+
+    ## Instruction:
+    Delete at least {{ min_w }} words and at most {{ max_w }} words from the original transcription.
+    Use exactly 1 or 2 contiguous deletion chunks.
+    Avoid deleting structurally required words such as: for, to, of, that, it, can, is/are/was/were, a/an/the, and/or.
+
+  judge_system_prompt: |-
+    You are an expert evaluator.
+
+    Verify THREE things:
+
+    (A) Alignment (FLEXIBLE ON PUNCTUATION):
+      - new_text must equal original_text with ONLY the exact deleted phrases removed.
+      - EXCEPTION: Changes to capitalization (e.g., new first word) and punctuation (e.g., removing extra commas) are FULLY ALLOWED. Do not penalize for this.
+
+    (B) Fluency & Grammar:
+      - new_text must be strictly grammatical and natural. Reject missing articles or orphaned prepositions.
+      - Ensure it doesn't sound completely broken.
+
+    (C) Caption Validation:
+      1) ZERO hallucination.
+      2) new_caption must be a natural standalone description with NO edit/grammar/inflection commentary.
+
+    Return ONLY valid JSON:
+    {"valid": true/false, "reason": "Concrete. Mention deleted phrases, fluency, and caption issues."}
+
+  judge_user_prompt: |-
+    ## Original Text:
+    {{ original_text }}
+
+    ## Original Audio Caption:
+    {{ original_caption }}
+
+    ## Edit Operation Applied:
+    {{ edit_operation }}
+
+    ## Modified Text:
+    {{ new_text }}
+
+    ## Modified Audio Caption:
+    {{ new_caption }}
+
+
+transcription_sub:
+  words_range: [1, 5]
+  system_prompt: |-
+    You are an expert audio transcription and caption editor.
+
+    HARD CONSTRAINTS (MUST FOLLOW):
+    0) You may ONLY substitute existing words/short phrases with new words/phrases in-place.
+       - Minor adjustments to punctuation/capitalization are ALLOWED.
+    1) Use EXACTLY 1 or 2 substitution locations total.
+    2) BOUNDARY & AGREEMENT CHECK (CRITICAL):
+       - If replacing a noun, you MUST check preceding articles (a/an) and quantifiers (much/many). Expand the <OLD> span to include the quantifier if needed (e.g., replace "much candy" with "many snacks", not just "candy" with "snacks").
+       - Subject-Verb Agreement: Ensure the new phrase matches the plurality of the surrounding verbs.
+    3) GRAMMATICAL EQUIVALENCY (CRITICAL):
+       - The <NEW> phrase MUST serve the EXACT SAME grammatical function as the <OLD> phrase. Do not replace a full clause containing a verb with a bare noun phrase.
+    4) After substitution, the new sentence MUST be strictly grammatical, logically coherent, and pragmatically plausible.
+
+    TASK:
+    Step 1 — Think and Draft ("draft_text").
+    - Pre-compute the final sentence to verify quantifiers, articles, and verbs match perfectly.
+
+    Step 2 — Write edit_operation.
+    - Format strictly as: "Replace '<OLD>' with '<NEW>'"
+    - The <OLD> string MUST contain all necessary boundary words for a clean swap.
+
+    Step 3 — Produce new_asr_text.
+
+    Step 4 — Produce new_caption.
+    - ZERO HALLUCINATION.
+    - TONE ACCURACY: If new_asr_text still contains filler words (uh, um, like), the caption MUST NOT describe the speech as "straightforward" or "fluent". Reflect reality.
+    - NO EDIT METADATA.
+
+    OUTPUT:
+    Return ONLY valid JSON with exactly these keys:
+    {
+      "draft_text": "<your internal preview of the final sentence>",
+      "edit_operation": "<concise command>",
+      "new_asr_text": "<the modified transcription>",
+      "new_caption": "<the new, hallucination-free caption>"
+    }
+  user_prompt: |-
+    ## Original Transcription:
+    {{ text }}
+
+    ## Original Audio Caption:
+    {{ audio_caption }}
+
+    ## Instruction:
+    Substitute at least {{ min_w }} words and at most {{ max_w }} words in the original transcription.
+    Use exactly 1 or 2 substitution locations total.
+    Do NOT create logical contradictions or break fixed expressions.
+    The sentence must remain strictly grammatical and natural.
+
+  judge_system_prompt: |-
+    You are an expert evaluator.
+
+    Verify:
+
+    (A) Alignment (FLEXIBLE ON PUNCTUATION):
+      - new_text must only differ from original_text by the exact substitutions in edit_operation.
+      - EXCEPTION: Minor punctuation and capitalization adjustments are allowed.
+
+    (B) Fluency & Coherence (STRICT BOUNDARY CHECK):
+      - new_text must be strictly grammatical. 
+      - Pay SPECIAL ATTENTION to boundaries: Check for mismatched quantifiers (e.g., "too much snacks" -> INVALID) or broken articles.
+
+    (C) Caption Validation:
+      1) ZERO hallucination.
+      2) TONE CHECK: If new_text contains hesitations/fillers ("uh", "um"), the caption MUST NOT falsely claim the speech is "straightforward".
+      3) NO edit/meta commentary.
+
+    Return ONLY valid JSON:
+    {"valid": true/false, "reason": "Concrete. Mention substitutions, boundary coherence, and caption issues."}
+
+  judge_user_prompt: |-
+    ## Original Text:
+    {{ original_text }}
+
+    ## Original Audio Caption:
+    {{ original_caption }}
+
+    ## Edit Operation Applied:
+    {{ edit_operation }}
+
+    ## Modified Text:
+    {{ new_text }}
+
+    ## Modified Audio Caption:
+    {{ new_caption }}
+
+
+transcription_replace_sentence:
+  system_prompt: |-
+    You are an expert audio transcription and caption editor.
+
+    TASK:
+    1. Output an edit prompt to create an entirely new sentence.
+    - Write an entirely new, fluent sentence with a similar word count to the original text.
+    - The writing style is exactly: `Rewrite the sentence with '(new full text)'`.
+
+    2. Output the new transcription.
+    - The new transcription must be exactly the same as the new text described in the edit prompt.
+
+    3. Create a new caption to STRICTLY MATCH the new transcription.
+    - CRITICAL CAPTION RULES:
+      * Content Accuracy (ZERO HALLUCINATION): The new caption must exclusively describe the events/speech in the NEW transcription. Do NOT carry over obsolete facts from the old transcription.
+      * Naturalness (NO EDIT METADATA): The caption MUST read as a completely natural, standalone, and brand-new description. NEVER use words like "rewritten", "replaced", or "now says".
+      * Style Matching: Strictly mirror the writing style and detail level of the Original Audio Caption.
+
+    OUTPUT:
+    Return ONLY valid JSON with exactly these keys:
+    {
+      "edit_operation": "<the rewrite command>",
+      "new_asr_text": "<the completely new transcription>",
+      "new_caption": "<the completely new, hallucination-free caption>"
+    }
+
+  user_prompt: |-
+    ## Original Transcription length:
+    {{ text.split() | length }} words
+
+    ## Original Audio Caption:
+    {{ audio_caption }}
+
+    ## Instruction:
+    Rewrite the entire transcription with a completely new, fluent, and reasonable sentence of similar length.
+
+  judge_system_prompt: |-
+    You are an expert evaluator.
+
+    Verify:
+    (A) Alignment: The new text exactly matches the content inside the edit operation.
+    (B) Fluency: The new sentence is fluent and stands logically on its own.
+    (C) Caption Validation:
+        1. The new caption perfectly matches the new text (NO hallucinations).
+        2. Absolutely NO mention of replacement, rewriting, or editing.
+        3. Writing style successfully mirrors the original caption.
+
+    Return ONLY valid JSON:
+    {"valid": true/false, "reason": "Brief explanation covering full sentence replacement validity and caption naturalness."}
+
+  judge_user_prompt: |-
+    ## Original Audio Caption:
+    {{ original_caption }}
+
+    ## Edit Operation Applied:
+    {{ edit_operation }}
+
+    ## Newly generated Text:
+    {{ new_text }}
+
+    ## Newly generated Caption:
+    {{ new_caption }}

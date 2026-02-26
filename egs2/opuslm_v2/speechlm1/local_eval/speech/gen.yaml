@@ -1,3 +1,4 @@
+# set global MAX_DURATION
 vllm:
   url: "http://cnode1-001:8100/v1"
   model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"

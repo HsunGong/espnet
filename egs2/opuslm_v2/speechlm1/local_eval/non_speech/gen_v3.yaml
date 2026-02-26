@@ -1,0 +1,208 @@
+vllm:
+  url: "http://cnode1-004:8000/v1,http://cnode1-006:8000/v1"
+  model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+  max_tokens: 4096
+  temperature: 0.85   # slightly higher than v2 for creative diversity
+
+judge:
+  url: "http://cnode1-004:8000/v1,http://cnode1-006:8000/v1"
+  model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+  max_tokens: 2048
+  temperature: 0.2
+
+captioner:
+  url: "http://cnode1-002:8000/v1,http://cnode1-002:8001/v1,http://cnode1-002:8002/v1,http://cnode1-002:8003/v1,http://cnode1-002:8004/v1,http://cnode1-002:8005/v1,http://cnode1-002:8006/v1,http://cnode1-002:8007/v1"
+  model: "Qwen/Qwen3-Omni-30B-A3B-Captioner"
+
+# ==========================================
+# Style Exemplars
+# ==========================================
+# High-quality reference captions spanning different audio types.
+# 2-3 are randomly sampled per LLM call as writing-style anchors.
+# You can also build a dynamic bank via --style_bank_size at runtime.
+style_exemplars: {}
+
+# ==========================================
+# Edit Type Pool  (rich & creative)
+# ==========================================
+edit_type_pool:
+  # --- Scene & Environment ---
+  - scene_transform         # change environment (studio → rooftop, café → forest, subway → underwater)
+  - background_replace      # swap background ambience (traffic → ocean waves, silence → bustling market)
+  - weather_change          # add / change weather layer (rain, thunder, wind, crackling frost, hail)
+  - spatial_transform       # change acoustic space (bedroom → cathedral, close-mic → across a canyon)
+  - time_of_day_shift       # shift temporal feel (dawn chorus → midnight crickets, rush-hour → 3 AM stillness)
+  - location_teleport       # drop the same activity into a wildly different place (office meeting → deep cave, kitchen → space station cockpit)
+  - season_shift            # change seasonal ambience (summer cicadas → winter wind, spring rain → autumn leaves crunching)
+
+  # --- Content Transformation ---
+  - activity_shift          # change what is happening (speaking → singing, playing → tuning, walking → running)
+  - genre_morph             # transform musical genre (classical → synthwave, folk → heavy metal, jazz → lo-fi beats)
+  - instrument_swap         # replace instruments (piano → marimba, electric guitar → sitar, drums → hand-claps)
+  - voice_transform         # alter vocal traits (male → female, child → elderly, whisper → shout, solo → choir)
+  - language_shift          # switch language or accent (English → Japanese, Southern drawl → Received Pronunciation)
+  - species_swap            # swap the sound source entirely (dog barking → seal barking, bird chirping → baby babbling, cat purring → engine idling)
+  - action_reversal         # reverse what's happening (door closing → door opening, applause building → applause fading, engine starting → engine dying)
+  - formality_shift         # change register of speech (casual chat → formal lecture, bedtime story → courtroom testimony, debate → lullaby)
+
+  # --- Emotional & Mood ---
+  - mood_shift              # change emotional tone (serene → ominous, cheerful → melancholic, tense → relieved)
+  - energy_change           # alter energy level (lazy afternoon → frenetic rush, quiet contemplation → wild celebration)
+  - tempo_change            # speed / rhythm shift (adagio → presto, steady 4/4 → odd 7/8 meter, rubato → metronomic)
+  - tension_arc             # inject suspense buildup or release (calm → slowly creeping dread, frantic → sudden eerie silence)
+  - comedic_twist           # add absurd or humorous element (serious lecture interrupted by rubber duck squeak, opera singer hiccups mid-aria)
+
+  # --- Structural ---
+  - element_addition        # layer new element (add birdsong, footsteps, a second voice, rain)
+  - element_removal         # strip something out (remove drums, silence the TV, mute the crowd)
+  - participant_change      # change who or what is present (solo → duet, one dog → a whole kennel, monologue → dialogue)
+  - semantic_rewrite        # change spoken words / lyrics while preserving voice character & rhythm
+  - narrative_extension     # continue or complete the unfolding scene / story
+  - crowd_scaling           # scale population (one person → a stadium crowd, packed bar → empty room with echo, single violin → full orchestra)
+  - perspective_shift       # change listener POV (audience seat → backstage, street level → high balcony, inside car → outside car)
+  - interruption            # add an unexpected intrusion (phone ringing mid-speech, power outage killing the music, fire alarm during a lecture)
+  - foley_reimagine         # replace realistic sound effects with creative stand-ins (footsteps as coconut shells, thunder as metal sheet rumble, rain as rice on tin)
+
+  # --- Quality & Stylistic ---
+  - quality_transform       # change fidelity (lo-fi cassette hiss → pristine studio, clean → intentionally degraded)
+  - era_shift               # jump decades (1940s big-band → 2020s hyperpop, vinyl crackle → digital clarity)
+  - cultural_transform      # cultural re-context (Viennese waltz → West-African highlife, Nashville country → Okinawan min'yō)
+  - medium_change           # change medium / format (live concert → phone recording, podcast → loudspeaker PA)
+  - style_transfer          # artistic register shift (documentary narration → fairy-tale storytelling, news report → slam poetry)
+  - film_genre_filter       # re-score as a movie genre (rom-com → horror soundtrack, thriller → whimsical Wes Anderson, sci-fi → spaghetti western)
+  - age_regression          # child-ify or adult-ify the scene (adult choir → children's choir, kids' playground → retirement-home garden, lullaby → bar ballad)
+  - mechanisation           # replace organic with mechanical or vice versa (live drummer → drum machine, synth pad → string ensemble, robot voice → warm human voice)
+  - underwater_filter       # apply aquatic transformation (muffled, bubbly, whale-song-like reverb on any source)
+  - dream_distortion        # surreal / dreamlike reworking (echoing voices, slowed fragments, ghostly reverb, non-linear layering)
+
+# ==========================================
+# Creative Edit Params
+# ==========================================
+creative_edit_params:
+  system_prompt: |-
+    You are a world-class audio scene designer. Your job: take a source audio description and produce ONE bold, creative transformation.
+
+    ═══════════════════════════════════════
+    DIVERSITY IS YOUR #1 OBJECTIVE
+    ═══════════════════════════════════════
+    ● You MUST pick from the edit categories provided below. Each call gives you a DIFFERENT random subset — explore the one you receive fully.
+    ● NEVER default to the "safest" or most obvious edit. If the source is speech, don't just add background noise. If it's music, don't just change genre. Think laterally.
+    ● Combine the chosen edit category with unexpected, specific details — concrete sounds, named places, vivid textures, precise actions.
+    ● Vary your sentence structures, vocabulary, and scene types across calls. Avoid formulaic patterns.
+
+    ═══════════════════════════════════════
+    CREATIVE EDIT RULES
+    ═══════════════════════════════════════
+    ● Be INVENTIVE and SPECIFIC. "Add rain" is boring. "The crack of a single thunderclap, then fat raindrops hit a tin awning while a stray cat scrambles underneath" is interesting.
+    ● Keep at least ONE recognisable anchor from the source (a voice, a rhythm, a spatial detail, a mood thread) so the edit feels grounded, not random.
+    ● The result must describe a physically plausible audio scene.
+
+    ═══════════════════════════════════════
+    edit_prompt RULES
+    ═══════════════════════════════════════
+    ● Conversational and human — like a real user casually requesting an edit.
+    ● Vary phrasing freely. Some examples of tone:
+      - "What if this was happening on a submarine?"
+      - "Turn this into something that sounds like a 1970s cop show."
+      - "I want to feel like I'm eavesdropping from the next room."
+      - "Make her sound furious instead of calm."
+      - "Can you add the chaos of a food market around this?"
+    ● If speech or lyrics exist, include quotations VERBATIM when relevant.
+    ● Max 30 words (excluding quoted speech/lyrics).
+
+    ═══════════════════════════════════════
+    target_caption RULES
+    ═══════════════════════════════════════
+    ● Must be a standalone, natural audio description — NEVER mention editing, transforming, or modifying.
+    ● Writing style MUST closely match the source caption's tone, sentence structure, and detail level.
+    ● If style exemplars are provided, match their register.
+    ● Similar length to the source caption (±20%).
+    ● Integrate the edit seamlessly — the result reads like an original scene.
+    ● Speech/lyrics must appear VERBATIM in the caption.
+
+    ═══════════════════════════════════════
+    FORMAT EXAMPLES (showing structure only — do NOT reuse these scenes)
+    ═══════════════════════════════════════
+    ● Source: "A man reads aloud in a quiet room."
+      → {"edit_type": "scene_transform", "edit_prompt": "What if he's reading on a wind-battered rooftop?", "target_caption": "A man reads aloud on a rooftop; gusts snap at his pages while traffic hums far below and a helicopter chops overhead."}
+
+    ● Source: "Birds chirping in a forest."
+      → {"edit_type": "tension_arc", "edit_prompt": "Make it feel like something is approaching.", "target_caption": "Birds chirp in a forest, but one by one they fall silent; heavy footsteps crunch through underbrush, growing closer with each step."}
+
+    ● Source: "A woman sings a folk ballad with acoustic guitar."
+      → {"edit_type": "era_shift", "edit_prompt": "Give it a wartime 1940s radio vibe.", "target_caption": "A woman's voice crackles through a vintage radio, singing a folk ballad over a gently strummed acoustic guitar; faint static drifts between verses."}
+
+    ● Source: "A clock ticking."
+      → {"edit_type": "comedic_twist", "edit_prompt": "Add something absurd — maybe a cuckoo that's had too much coffee.", "target_caption": "A clock ticks steadily, then a manic cuckoo bursts out six times in rapid succession, pauses, and adds one last apologetic chirp."}
+
+    Output ONLY valid JSON — nothing else:
+    {"edit_type": "<category>", "edit_prompt": "<natural user request>", "target_caption": "<new complete audio description>"}
+
+  user_prompt: |-
+    ## Source Audio Description:
+    {{ source_caption }}
+    {% if style_exemplars %}
+
+    ## Writing Style References (match this tone and detail level):
+    {% for ex in style_exemplars %}
+    [{{ loop.index }}] {{ ex }}
+    {% endfor %}
+    {% endif %}
+
+    ## Your Edit Category Options (pick ONE — these are randomly sampled for you, explore them fully):
+    {{ edit_types }}
+
+    IMPORTANT: Pick whichever category leads to the MOST SURPRISING and VIVID transformation for this specific source. Do NOT pick the most "obvious" match.
+
+    ## Output valid JSON only:
+    {"edit_type": "<category>", "edit_prompt": "<natural user request>", "target_caption": "<new complete audio description>"}
+
+# ==========================================
+# Judge Params
+# ==========================================
+judge_params:
+  system_prompt: |-
+    You are an AI quality judge for creative audio-edit captions. Given a source caption, an edit request, and the resulting target caption, decide whether the result meets quality standards.
+
+    ═══════════════════════════════════════
+    EVALUATION CRITERIA
+    ═══════════════════════════════════════
+    1. EDIT FIDELITY — Does the target actually reflect the requested edit?
+    2. CREATIVITY — Is the change interesting, not trivially obvious or minimal?
+    3. COHERENCE — Does the target read as a natural, self-contained audio scene (no editing jargon, no meta-language)?
+    4. STYLE MATCH — Does the target's writing style (tone, detail level, sentence length) match the source?
+    5. ANCHOR — Is at least one recognisable element from the source preserved?
+    6. PLAUSIBILITY — Could this audio scene physically exist (no impossible physics)?
+    7. SPEECH / LYRICS — If quoted text is involved, is it handled correctly (kept verbatim or intentionally rewritten)?
+
+    ═══════════════════════════════════════
+    ALLOWED (do NOT penalise)
+    ═══════════════════════════════════════
+    - Dramatic scene changes (expected for creative edits)
+    - Complete re-imagining of setting, mood, or genre
+    - Removal of major source elements IF the edit demands it
+
+    ═══════════════════════════════════════
+    REJECT if
+    ═══════════════════════════════════════
+    - Target contains editing meta-language ("the background was replaced …", "we added …")
+    - Writing style is wildly different from the source (e.g., source = 2 sentences, target = a paragraph)
+    - Scene is incoherent or physically impossible
+    - Zero connection to the source remains (no anchor at all)
+    - Target simply paraphrases the source with no meaningful change
+
+    Return strict JSON only:
+    {"valid": true/false, "reason": "Concise explanation (max 50 words)"}
+
+  judge_user_prompt: |-
+    ## Source Caption:
+    {{ source_caption }}
+
+    ## Edit Request:
+    {{ edit_prompt }}
+
+    ## Target Caption:
+    {{ target_caption }}
+
+    ## Return strict JSON only:
+    {"valid": true/false, "reason": "Concise explanation"}

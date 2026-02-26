@@ -1,60 +1,44 @@
 runtime:
   num_workers: 8
-  use_default_task_mapping: false
-
-models:
-  captioner:
-    provider: qwen3
-    api_key: ""
-    base_url: "http://cnode1-010:9000/v1"
-    model: "Qwen/Qwen3-Omni-30B-A3B-Captioner"
-    headers: {}
-    decode_kwargs:
-      temperature: 0.65
-      max_tokens: 1024
-
-  judge:
-    provider: qwen3
-    api_key: ""
-    base_url: "http://cnode1-010:8100/v1"
-    model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
-    headers: {}
-    decode_kwargs:
-      temperature: 0.2
-      max_tokens: 1024
-
-  gemini_judge:
-    provider: gemini
-    api_key: "${Authorization}"
-    base_url: "https://your-gemini-api-endpoint"
-    model: "gemini-2.5-pro"
-    headers:
-      Authorization: "${Authorization}"
-      Cookie: "${Cookie}"
-    decode_kwargs:
-      stream: false
-      temperature: 0.1
-      max_tokens: 512
 
 scorers:
   asr_wer:
+    resume: false
     model_name: openai/whisper-large-v3
-    batch_size: 16
+    batch_size: 32
     language: en
 
   speaker_similarity_wespeaker:
     model_id: "english"
     device: "cuda"
 
+  speaker_similarity_wavlm:
+    model_name: "wavlm_large"
+    checkpoint: ./downloads/wavlm_large_finetune.pth
+    device: "cuda"
+    batch_size: 1 # have to be one, see the source code fore more
+
   llm_judge_gemini:
-    model_ref: gemini_judge
-    decode_kwargs: {}
+    batch_size: 512
+    max_samples: 15
+    model_kwargs:
+      model: "gemini-2.5-flash-preview"
 
   llm_judge_caption_llm:
-    captioner_model_ref: captioner
-    judge_model_ref: judge
-    caption_decode_kwargs: {}
-    judge_decode_kwargs: {}
+    batch_size: 512
+    captioner:
+      base_url: "http://cnode1-002:8000/v1,http://cnode1-002:8001/v1,http://cnode1-002:8002/v1,http://cnode1-002:8003/v1,http://cnode1-002:8004/v1,http://cnode1-002:8005/v1,http://cnode1-002:8006/v1,http://cnode1-002:8007/v1"
+      model: "Qwen/Qwen3-Omni-30B-A3B-Captioner"
+      # decode_kwargs:
+      #   temperature: 0.65
+      #   max_tokens: 1024
+
+    judge_model:
+      base_url: "http://cnode1-001:8000/v1"
+      model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+      default_kwargs:
+        temperature: 0.2
+        max_tokens: 1024
 
   speed_duration:
     relative_tolerance: 0.15
@@ -84,7 +68,7 @@ scorers:
     normalize_aggregate: true
     allow_download: false
 
-  emotion_modelscope:
+  # emotion_modelscope:
     model: "iic/emotion2vec_plus_large"
     gen_kwargs:
       batch_size: 32
@@ -95,195 +79,212 @@ tasks:
     scorers:
       - name: asr_wer
       - name: speaker_similarity_wespeaker
+      - name: speaker_similarity_wavlm
+      - name: pseudo_mos
+        predictor_types: ["dnsmos", "utmos"]
 
   transcription_del:
     scorers:
       - name: asr_wer
       - name: speaker_similarity_wespeaker
-
+      - name: speaker_similarity_wavlm
+      - name: pseudo_mos
+        predictor_types: ["dnsmos", "utmos"]
   transcription_sub:
     scorers:
       - name: asr_wer
       - name: speaker_similarity_wespeaker
-
+      - name: speaker_similarity_wavlm
+      - name: pseudo_mos
+        predictor_types: ["dnsmos", "utmos"]
   transcription_replace_sentence:
     scorers:
       - name: asr_wer
       - name: speaker_similarity_wespeaker
-
+      - name: speaker_similarity_wavlm
+      - name: pseudo_mos
+        predictor_types: ["dnsmos", "utmos"]
   transcription_add_paralinguistic:
+    scorers:
+      # - name: asr_wer
+      - name: speaker_similarity_wespeaker
+      - name: llm_judge_caption_llm
+        score_key: score
+        system_prompt: |-
+          You are an expert evaluator.
+          Assess if the modified caption reflects added paralinguistic features at correct position.
+          
+          Output ONLY valid JSON: {"score": <0/1>, "reason": "..."}
+        user_prompt: |-          
+          ## Edit Prompt
+          {{ edit_prompt }}
+
+          ## Expected Text
+          {{ target_text }}
+          
+          ## Target Audio Caption
+          {{ target_caption_gen_now }}
+
+          Determine if the modified caption naturally and accurately indicates the presence of new paralinguistic features.
+
+      - name: llm_judge_gemini
+        score_key: score
+        audio_keys:
+          - eval_audio_path
+        user_prompt: |-
+          ## Edit Instruction
+          {{ edit_prompt }}
+
+          Listen to the audio carefully.
+          Evaluate whether the specified paralinguistic feature (e.g., laughter, cough, breath, filled pause) is present
+          at the correct position as described in the edit instruction, and that the surrounding speech content is preserved.
+
+          Output ONLY valid JSON: {"score": <0 or 1>, "reason": "..."}
+      - name: pseudo_mos
+        predictor_types: ["dnsmos", "utmos"]
+  style_whisper:
     scorers:
       - name: asr_wer
       - name: speaker_similarity_wespeaker
+      - name: llm_judge_caption_llm
+        score_key: score
+        system_prompt: |-
+          You are an expert evaluator.
+          Assess if the modified caption reflects the new speaking style.
+          
+          Output ONLY valid JSON: {"score": <0/1>, "reason": "..."}
+        user_prompt: |-
+          ## Edit Instruction
+          {{ edit_prompt }}
 
-  style_whisper:
-    scorers:
+          ## Original Audio Caption
+          {{ audio_caption }}
+
+          ## Expected Audio Caption After Edit
+          {{ target_audio_caption }}
+
+          Determine if the modified caption naturally and accurately reflects the target speaking style described in the edit instruction.
+
+          Output ONLY valid JSON: {"score": <0 or 1>, "reason": "..."}
       - name: llm_judge_gemini
-        prompts:
-          system: |-
-            You are an expert evaluator. Compare style consistency between the original and modified audios.
-            Output ONLY valid JSON: {"valid": true, "score": 1.0, "reason": "..."}
-          user: |-
-            ## Metadata
-            {{ sample_json }}
+        score_key: score
+        audio_keys:
+          - eval_audio_path
+        user_prompt: |-
+          ## Edit Instruction
+          {{ edit_prompt }}
 
-            ## Task
-            Evaluate whether the modified audio reflects the requested speaking style while preserving intelligibility.
-            Focus on style cues such as tone, delivery, and pacing.
-        decode_kwargs: {}
-      - name: asr_wer
+          Listen to the audio carefully.
+          Evaluate whether the speaking style (e.g., whispering, pacing, pitch, tone) matches the target style
+          described in the edit instruction, while the speech content remains intact.
 
+          Output ONLY valid JSON: {"score": <0 or 1>, "reason": "..."}
+      - name: pseudo_mos
+        predictor_types: ["dnsmos", "utmos"]
   style_emotion:
     scorers:
-      - name: emotion_modelscope
-      - name: llm_judge_gemini
-        prompts:
-          system: |-
-            You are an expert evaluator. Compare emotional expression between two audios.
-            Output ONLY valid JSON: {"valid": true, "score": 1.0, "reason": "..."}
-          user: |-
-            ## Metadata
-            {{ sample_json }}
-
-            ## Task
-            Evaluate whether the modified audio expresses the target emotion naturally while remaining clear.
-        decode_kwargs: {}
       - name: asr_wer
+      - name: emotion_modelscope
+      - name: llm_judge_caption_llm
+        score_key: score
+        system_prompt: |-
+          You are an expert evaluator.
+          Assess if the modified caption reflects a change in emotion as described in the edit instruction.
+          
+          Output ONLY valid JSON: {"score": <0/1>, "reason": "..."}
+        user_prompt: |-
+          ## Edit Instruction
+          {{ edit_prompt }}
 
+          ## Original Audio Caption
+          {{ audio_caption }}
+
+          ## Expected Audio Caption After Edit
+          {{ target_audio_caption }}
+
+          Determine if the modified caption naturally and accurately reflects the target emotion described in the edit instruction.
+
+          Output ONLY valid JSON: {"score": <0 or 1>, "reason": "..."}
+
+      - name: llm_judge_gemini
+        score_key: score
+        audio_keys:
+          - eval_audio_path
+        user_prompt: |-
+          ## Edit Instruction
+          {{ edit_prompt }}
+
+          Listen to the audio carefully.
+          Evaluate whether the speaker's emotional expression (e.g., happy, sad, angry, surprised) matches
+          the target emotion described in the edit instruction, while the speech content remains intact.
+
+          Output ONLY valid JSON: {"score": <0 or 1>, "reason": "..."}
+      - name: pseudo_mos
+        predictor_types: ["dnsmos", "utmos"]
   audio_effect_speed:
     scorers:
       - name: speed_duration
-      - name: llm_judge_caption_llm
-        caption_prompt: |-
-          Describe the speech rate, articulation pace, and any obvious speed effects in this audio.
-        prompts:
-          system: |-
-            You are an expert evaluator. Assess if the modified caption reasonably reflects the applied speed effect.
-            Output ONLY valid JSON in format: {"valid": true, "score": 1.0, "reason": "..."}
-          user: |-
-            ## Metadata
-            {{ sample_json }}
-
-            ## Original Caption
-            {{ caption_a }}
-
-            ## Modified Caption
-            {{ caption_b }}
-
-            Determine if the modified caption naturally and accurately describes faster or slower speaking.
-        caption_decode_kwargs: {}
-        judge_decode_kwargs: {}
-
+      - name: asr_wer
+      - name: speaker_similarity_wespeaker
+      - name: pseudo_mos
+        predictor_types: ["dnsmos", "utmos"]
   audio_effect_volume:
     scorers:
       - name: volume_loudness
-      - name: llm_judge_caption_llm
-        caption_prompt: |-
-          Describe loudness, perceived volume, and dynamic intensity in this audio.
-        prompts:
-          system: |-
-            You are an expert evaluator. Assess if the modified caption reasonably reflects the applied volume effect.
-            Output ONLY valid JSON in format: {"valid": true, "score": 1.0, "reason": "..."}
-          user: |-
-            ## Metadata
-            {{ sample_json }}
-
-            ## Original Caption
-            {{ caption_a }}
-
-            ## Modified Caption
-            {{ caption_b }}
-
-            Determine if the modified caption naturally and accurately describes louder or quieter speech.
-        caption_decode_kwargs: {}
-        judge_decode_kwargs: {}
-
+      - name: asr_wer
+      - name: speaker_similarity_wespeaker
+      - name: pseudo_mos
+        predictor_types: ["dnsmos", "utmos"]
   audio_effect_pitch:
     scorers:
       - name: pitch_shift
-      - name: llm_judge_caption_llm
-        caption_prompt: |-
-          Describe perceived vocal pitch and timbre characteristics in this audio.
-        prompts:
-          system: |-
-            You are an expert evaluator. Assess if the modified caption reasonably reflects the applied pitch effect.
-            Output ONLY valid JSON in format: {"valid": true, "score": 1.0, "reason": "..."}
-          user: |-
-            ## Metadata
-            {{ sample_json }}
-
-            ## Original Caption
-            {{ caption_a }}
-
-            ## Modified Caption
-            {{ caption_b }}
-
-            Determine if the modified caption naturally and accurately describes a higher or lower pitched voice.
-        caption_decode_kwargs: {}
-        judge_decode_kwargs: {}
-
+      - name: asr_wer
+      - name: pseudo_mos
+        predictor_types: ["dnsmos", "utmos"]
   audio_effect_reverb:
     scorers:
-      - name: llm_judge_gemini
-        prompts:
-          system: |-
-            You are an expert acoustic evaluator for reverberation.
-            Output ONLY valid JSON: {"valid": true, "score": 1.0, "reason": "..."}
-          user: |-
-            ## Metadata
-            {{ sample_json }}
-
-            Compare the two audios and determine whether the modified audio sounds more reverberant,
-            like being recorded in a room or hall, while remaining natural.
-        decode_kwargs: {}
-
       - name: llm_judge_caption_llm
-        caption_prompt: |-
-          Describe acoustic space and reverberation (e.g., dry studio vs room/hall echo) in this audio.
-        prompts:
-          system: |-
-            You are an expert evaluator. Assess if the modified caption reflects added reverberation.
-            Output ONLY valid JSON: {"valid": true, "score": 1.0, "reason": "..."}
-          user: |-
-            ## Metadata
-            {{ sample_json }}
+        score_key: score
+        system_prompt: |-
+          You are an expert evaluator.
+          Assess if the modified caption reflects added reverberation as described in the edit instruction.
 
-            ## Original Caption
-            {{ caption_a }}
+          Output ONLY valid JSON: {"score": <0/1>, "reason": "..."}
+        user_prompt: |-
+          ## Edit Instruction
+          {{ edit_prompt }}
 
-            ## Modified Caption
-            {{ caption_b }}
+          ## Original Audio Caption
+          {{ audio_caption }}
 
-            Determine if the modified caption naturally and accurately indicates more reverberant space.
-        caption_decode_kwargs: {}
-        judge_decode_kwargs: {}
+          ## Expected Audio Caption After Edit
+          {{ target_audio_caption }}
 
+          Determine if the modified caption naturally and accurately indicates added reverberation (e.g., room or hall echo) as described in the edit instruction.
+
+          Output ONLY valid JSON: {"score": <0 or 1>, "reason": "..."}
+
+      - name: llm_judge_gemini
+        score_key: score
+        audio_keys:
+          - eval_audio_path
+        user_prompt: |-
+          ## Edit Instruction
+          {{ edit_prompt }}
+
+          Listen to the audio carefully.
+          Evaluate whether the audio sounds reverberant (e.g., as if recorded in a room or hall with echo)
+          as described in the edit instruction, while remaining natural and intelligible.
+
+          Output ONLY valid JSON: {"score": <0 or 1>, "reason": "..."}
+      - name: pseudo_mos
+        predictor_types: ["dnsmos", "utmos"]
   audio_effect_dereverb:
     scorers:
       - name: asr_wer
+      - name: speaker_similarity_wespeaker
+      - name: speaker_similarity_wavlm
       - name: pseudo_mos
-        predictor_types: ["dnsmos"]
-        aggregate_keys: ["dns_overall", "dns_p808"]
-        aggregate_weights:
-          dns_overall: 0.7
-          dns_p808: 0.3
-      - name: llm_judge_caption_llm
-        caption_prompt: |-
-          Describe acoustic cleanliness, dryness, and echo characteristics in this audio.
-        prompts:
-          system: |-
-            You are an expert evaluator. Assess if the modified caption reflects dereverberation (cleaner, drier audio).
-            Output ONLY valid JSON: {"valid": true, "score": 1.0, "reason": "..."}
-          user: |-
-            ## Metadata
-            {{ sample_json }}
-
-            ## Original Caption
-            {{ caption_a }}
-
-            ## Modified Caption
-            {{ caption_b }}
-
-            Determine if the modified caption naturally and accurately indicates reduced echo and cleaner speech.
-        caption_decode_kwargs: {}
-        judge_decode_kwargs: {}
+        predictor_types: ["dnsmos", "utmos"]
+      - name: pseudo_mos
+        predictor_types: ["dnsmos", "utmos"]

@@ -1,0 +1,191 @@
+vllm:
+  url: "http://cnode1-004:8000/v1,http://cnode1-006:8000/v1"
+  model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+  # temperature=0.7, top_p=0.8, top_k=20, min_p=0.0, presence_penalty=1.5, repetition_penalty=1.0
+  max_tokens: 2048
+  temperature: 0.7
+
+judge:
+  url: "http://cnode1-004:8000/v1,http://cnode1-006:8000/v1"
+  model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+  max_tokens: 2048
+  temperature: 0.2
+
+captioner:
+  url: "http://cnode1-002:8000/v1,http://cnode1-002:8001/v1,http://cnode1-002:8002/v1,http://cnode1-002:8003/v1,http://cnode1-002:8004/v1,http://cnode1-002:8005/v1,http://cnode1-002:8006/v1,http://cnode1-002:8007/v1,http://cnode1-003:8000/v1,http://cnode1-003:8001/v1,http://cnode1-003:8002/v1,http://cnode1-003:8003/v1,http://cnode1-003:8004/v1,http://cnode1-003:8005/v1,http://cnode1-003:8006/v1,http://cnode1-003:8007/v1"
+  model: "Qwen/Qwen3-Omni-30B-A3B-Captioner"
+
+# ==========================================
+# ADD Operation Prompts
+# ==========================================
+add_params:
+  system_prompt: &system_prompt |-
+    You are an expert audio data synthesizer. Your task has TWO steps:
+
+    Step 1 — Generate the Final Target Caption:
+    1. Overall Rule
+    - Rewrite the audio description as if it **naturally** contains the new element.
+    - Seamlessly integrate the new element into the environment.
+    - Do NOT mention any editing action (e.g., add, insert, include, overlay, mix).
+
+    2. Detailed Rules
+    - Speech/Lyrics content: If speech or lyrics are involved in the orignal or new element, they MUST appear verbatim in the final target caption.
+    - Temporal Timing (Revised): Avoid unnecessary timestamps, BUT if the Edit Operation (or {{ add_event }} / {{ remove_event }}) specifies ANY ordering, placement, cycle count, or "right after/before/at the end of" constraints, you MUST describe that sequencing explicitly in the Target Caption using clear relative order words (e.g., "right after", "only after", "at the end of the fifth cycle"). If no ordering is specified, assume the new element starts together with the existing scene and keep timing minimal.
+    - Complete Constraint Satisfaction (Hard): Every discrete required micro-event mentioned in the edit (e.g., "sharp digital click", "Hey!" vocal, "gong hit") MUST appear explicitly in the Target Caption. Do not merge or imply it—state it.
+    - Structural Edits Clarity: If the requested change is explicitly about the opening/intro (e.g., "at the beginning", "intro", "opening"), the Target Caption MUST clearly describe the opening as containing the new element (e.g., "The clip opens with...").
+    - Summary Description: Focus on the overall scene and how the new element fits in, write as the same style as the original/element caption.
+    - ADD op Anchor: Do NOT introduce unrelated new elements beyond the provided added element.
+
+    3. Write Style and Coherence:
+    - The result must read like a natural caption of a complete finished audio clip.
+    - The writing style MUST strictly match the tone, structure, and level of detail of the Original Audio caption.
+    - The result should have similar length to the original caption.
+
+    Step 2 — Generate a natural user edit prompt:
+    - Write a concise, conversational request as if a normal user is asking an audio editor or AI to introduce the new element.
+    - Do NOT mechanically use command-line style verbs like "ADD", "INSERT", "OVERLAY", or "MIX" exclusively. Use a variety of natural expressions (e.g., "Make it sound like...", "I want to hear...", "Introduce...", "Have someone say...").
+    - If speech or lyrics are involved, they MUST be included verbatim in the request.
+    - Focus strictly on the desired new sound/event and its relationship to the environment, without explicitly naming the "original audio".
+    - Do NOT mention the final target caption or the original source caption totally.
+
+    Output JSON format only:
+    {
+      "target_caption": "<final natural caption with integrated element>",
+      "edit_prompt": "<concise operation command>",
+    }
+
+  user_prompt: &user_prompt |-
+    ## Original Audio:
+    {{ source_caption }}
+
+    ## Scene/Audio to Mixup:
+    {{ add_caption }}
+
+    ### more specific elements:
+    {{ add_event }}
+
+    ## Output JSON format only:
+    {
+      "target_caption": "<final natural caption with integrated element>",
+      "edit_prompt": "<concise operation command>",
+    }
+
+  judge_system_prompt: &judge_system_prompt |-
+    You are an AI judge validating whether an audio `Target Caption` correctly incorporates requested edits. You evaluate text descriptions only.
+
+    CRITICAL RULE: TOTAL SCENE REPLACEMENT IS ALLOWED AND EXPECTED.
+    Do NOT penalize or fail the validation if the original elements from the `Source Caption` (e.g., original music, specific voices, background scenes) are completely absent, replaced, or heavily altered in the `Target Caption`. You must IGNORE source preservation completely.
+
+    Your ONLY job is to verify the following Evaluation Criteria:
+    1. EDIT EXECUTION: Does the `Target Caption` successfully include the specific new sounds, actions, or structural changes (e.g., fading, truncating, specific noises) requested in the edit operation?
+    2. SCENE COHERENCE: Does the `Target Caption` read as a natural, cohesive, and standalone description of an audio scene? (It must NOT read like a robotic list of editing instructions).
+    3. VERBATIM TEXT: If the edit requests specific speech or lyrics to be added, they MUST appear verbatim in the `Target Caption`.
+
+    DO NOT fail the `Target Caption` for:
+    - "Completely replacing the original scene."
+    - "Failing to preserve the original context."
+    - "Omitting the original voice, instruments, or music."
+    - "Introducing unprompted narrative details to make the new scene coherent."
+
+    Return strict JSON format only:
+    {"valid": true/false, "reason": "Concise explanation"}
+
+  judge_user_prompt: &judge_user_prompt |-
+    ## Source Caption (Before edit):
+    {{ source_caption }}
+    
+    ## Target Caption (After edit):
+    {{ target_caption }}
+
+    ## Edit Operation:
+    {{ edit_prompt }}
+
+    ## Return strict JSON format only:
+    {"valid": true/false, "reason": "Concise explanation"}
+
+# ==========================================
+# REMOVE Operation Prompts
+# ==========================================
+remove_params:
+  system_prompt: *system_prompt
+  user_prompt: *user_prompt
+  judge_system_prompt: *judge_system_prompt
+  judge_user_prompt: *judge_user_prompt
+
+  edit_system_prompt: |-
+    You are an expert audio data synthesizer. Based on the provided captions, write a short, natural human command requesting to remove a specific audio element. 
+    
+    Focus on the specific sound/event/scene/speech being removed. 
+
+    Make it sound like a natural, conversational request from a user. 
+    Do NOT exclusively use mechanical verbs like "REMOVE" or "DELETE". Use a diverse range of natural expressions (e.g., "Take out the...", "Mute the...", "Get rid of the...", "Can you silence the...", "Cut the part where...").
+
+    If speech/lyrics are involved in the removed element, you MUST INCLUDE them verbatim in the edit prompt.
+    
+    Output JSON format only:
+    {
+      "edit_prompt": "<concise, natural user request to eliminate the sound. speech/lyrics included verbatim.>", 
+      "reason": "<no more than 50 words explaining how the prompt accurately reflects the removal>"
+    }
+
+  edit_user_prompt: |-
+    ## Original Audio:
+    {{ source_caption }}
+
+    ## Final Audio:
+    {{ target_caption }}
+
+    ## Scene/Elements to Remove:
+    {{ remove_caption }}
+
+    ### more specific elements:
+    {{ remove_event }}
+
+    ## Output JSON format only:
+    {"edit_prompt": "<Keep it concise and natural, as if instructing an audio editor. speech/lyrics is always included.>", "reason": "<no more than 50 words explaining the rationale>"}
+
+# ==========================================
+# REPLACE Operation Prompts
+# ==========================================
+replace_params:
+  system_prompt: *system_prompt
+  user_prompt: *user_prompt
+  judge_system_prompt: *judge_system_prompt
+  judge_user_prompt: *judge_user_prompt
+
+  edit_system_prompt: |-
+    You are an expert audio data synthesizer. Based on the provided original and target captions, your task is to write a short, natural human command requesting to change or substitute specific elements in the audio.
+
+    Rules for the Edit Prompt:
+    - Make it sound like a natural, conversational request from a normal user.
+    - Do NOT exclusively use mechanical formulas like "Remove X and add Y" or "Replace X with Y". Use a diverse range of natural expressions (e.g., "Swap out the [X] for a [Y]", "Change the [X] to [Y]", "Instead of the [X], let's hear [Y]", "Turn the [X] into [Y]").
+    - Speech/Lyrics Rule: If speech or lyrics are involved in the changed elements, you MUST INCLUDE both the original text and the new text verbatim in the edit prompt. (e.g., "Change the words '...' to '...'", or "Instead of him saying '...', make him say '...'").
+    - Focus strictly on the elements being swapped or altered. Do not describe the unchanged background unless absolutely necessary for context.
+
+    Output JSON format only:
+    {
+      "edit_prompt": "<concise, natural user request for the change. old/new speech included verbatim.>", 
+      "reason": "<no more than 50 words explaining how the prompt accurately reflects the substitution>"
+    }
+
+  edit_user_prompt: |-
+    ## Original Audio:
+    {{ source_caption }}
+
+    ## Final Audio:
+    {{ target_caption }}
+
+    ## Scene/Elements to Remove in original audio:
+    {{ remove_caption }}
+
+    ### more specific elements:
+    {{ remove_event }}
+
+    ## Scene/Elements to Add in final audio:
+    {{ add_caption }}
+
+    ### more specific elements:
+    {{ add_event }}
+
+    ## Output JSON format only:
+    {"edit_prompt": "<Keep it concise and natural, as if instructing an audio editor. speech/lyrics is always included.>", "reason": "<no more than 50 words explaining the rationale>"}

@@ -27,6 +27,9 @@ import json
 import os
 import random
 from pathlib import Path
+import librosa
+import soundfile as sf
+import numpy as np
 
 from tqdm import tqdm
 
@@ -38,6 +41,7 @@ random.seed(7)
 
 MODE_CHOICES = [
     "cat2split1",  # Caption1+Caption2 -> Target Audio (as prefill)
+    "cat2main",  # Caption1+Caption2 -> Target Audio (as prefill)
     "t2a_t2a",     # Caption1 -> Source Audio (turn1) ; Caption2 -> Target Audio (turn2)
     "a2t_t2a",     # Source Audio -> Caption1 (turn1) ; Caption2 -> Target Audio (turn2)
 ]
@@ -54,29 +58,44 @@ def build_messages(record: dict, mode: str) -> list | None:
     source_audio_caption = record["audio_caption"]
     source_audio_path = record["audio_path"]
     target_audio_caption = record["target_audio_caption"] # might use target_audio_caption_ref ?
-    target_audio_path = record["target_audio_path"]
+    target_audio_path = record.get("target_audio_path", None)
 
     concat_caption = f"Audio Clip1: {source_audio_caption}\nAudio Clip2: {target_audio_caption}"
 
+    if target_audio_path is not None and mode == "cat2main":
+        # concat source+target audio together
+        mixup_audio_path = Path(target_audio_path).with_suffix(".mixup.flac").as_posix()
+        if not Path(mixup_audio_path).exists():
+            audio, sr = librosa.load(source_audio_path, sr=16000)
+            audio2, sr2 = librosa.load(target_audio_path, sr=16000)
+            mixup_audio = np.concatenate([audio, audio2])
+            sf.write(mixup_audio_path, mixup_audio, samplerate=16000)
+        mixup_audio_path = os.path.realpath(mixup_audio_path)
+        last_audio = mixup_audio_path
+
     if mode == "cat2split1":
         messages = [["user", "text", concat_caption],["assistant", "audio", source_audio_path]]
-
+    elif mode == "cat2main":
+        messages = [["user", "text", concat_caption]]
     elif mode == "t2a_t2a":
         messages = [
             ["user", "text", source_audio_caption],
             ["assistant", "audio", source_audio_path],
             ["user", "text", target_audio_caption],
         ]
+        last_audio = target_audio_path
     elif mode == "a2t_t2a":
         messages = [
             ["user", "audio", source_audio_path],
             ["assistant", "text", source_audio_caption],
             ["user", "text", target_audio_caption],
         ]
+        last_audio = target_audio_path
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
-
+    if last_audio is not None and os.path.exists(last_audio):
+        messages.append(["assistant", "audio", last_audio])
     return messages
 
 # ---------------------------------------------------------------------------

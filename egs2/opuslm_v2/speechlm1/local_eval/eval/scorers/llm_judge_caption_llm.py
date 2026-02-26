@@ -1,157 +1,245 @@
 from __future__ import annotations
 
 import json
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-import requests
+import joblib
 from tqdm import tqdm
+import jinja2
 
-from .base import coerce_bool, render_template, try_parse_json
+
+import itertools
+import json
+import requests
+import threading
+import time
+from typing import Any, Dict, List, Optional, Set
+import random
+import logging
+
 from .base import BaseScorer
 
+def parse_vllm_urls(url_string: str) -> List[str]:
+    """Parse colon-separated vLLM URLs.
 
-def _clamp01(value: float) -> float:
-    return max(0.0, min(1.0, value))
+    Args:
+        url_string: Single URL or colon-separated URLs.
+            Example: "http://host1:8000/v1,http://host2:8000/v1"
+
+    Returns:
+        List of parsed URLs.
+    """
+    urls = list(filter(lambda x: x.startswith("http"), url_string.split(",")))
+
+    # Clean up URLs
+    return [url.rstrip("/") for url in urls if url]
 
 
-def _require_key(mapping: dict[str, Any], key: str, path: str) -> Any:
-    if key not in mapping:
-        raise KeyError(f"missing required key `{path}.{key}`")
-    return mapping[key]
+class VLLMClient:
+    """Synchronous client for vLLM OpenAI-compatible API with multi-URL support."""
+
+    def __init__(
+        self,
+        base_url: str,
+        model: Optional[str] = None,
+        max_concurrent: int = 65536,
+        per_endpoint_concurrent: int = 32,
+        timeout: int = 360,
+        max_retries: int = 3,
+        default_kwargs: dict = {},
+    ):
+        """Initialize the vLLM client.
+
+        Args:
+            base_url: Base URL(s) for the vLLM API. Can be a single URL or
+                multiple URLs separated by colons.
+                Example: "http://host1:8000/v1:http://host2:8000/v1"
+            model: Model name to use. Defaults to DEFAULT_MODEL.
+            max_concurrent: Hard upper cap on total in-flight requests.
+                In practice the effective limit is
+                ``len(endpoints) * per_endpoint_concurrent``, whichever is
+                smaller.
+            per_endpoint_concurrent: Max in-flight requests **per** vLLM
+                endpoint.  The actual semaphore value is
+                ``min(max_concurrent, n_endpoints * per_endpoint_concurrent)``.
+                Default 32 means 4 servers → 128 concurrent requests, which
+                is enough to saturate vLLM without triggering queue overflow.
+            timeout: Request timeout in seconds.
+            max_retries: Number of retry attempts on failure.
+        """
+        self.base_urls = parse_vllm_urls(base_url)
+        if not self.base_urls:
+            raise ValueError(f"No valid URLs found in: {base_url}")
+
+        print(f"Initialized vLLM client with {len(self.base_urls)} endpoint(s):")
+        for url in self.base_urls:
+            print(f"  - {url}")
+
+        self.model = model or DEFAULT_MODEL
+        self.max_concurrent = max_concurrent
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self.default_kwargs = default_kwargs
+
+    def chat_completion(
+        self,
+        messages: List[Dict[str, str]],
+        # temperature: float = 0.7,
+        # max_tokens: int = 512,
+        json_mode: bool = False,
+        **kwargs,
+    ) -> Optional[str]:
+        """Send a chat completion request with retry logic.
+
+        Args:
+            messages: List of message dicts with 'role' and 'content'.
+            temperature: Sampling temperature.
+            max_tokens: Maximum tokens to generate.
+            json_mode: If True, enforce JSON output format.
+
+        Returns:
+            Generated text content, or None if all retries failed.
+        """
+        for k in self.default_kwargs.keys():
+            kwargs.setdefault(k, self.default_kwargs[k])
+
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            **kwargs,
+        }
+
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        logging.debug(f"Request: {payload}")
+
+        for attempt in range(self.max_retries):
+            base_url = random.choice(self.base_urls) # self._get_next_url()
+            url = f"{base_url}/chat/completions"
+
+            try:
+                response = requests.post(url, json=payload, timeout=self.timeout)
+                if response.status_code == 200:
+                    data = response.json()
+                    # logging.debug(f"Response: {data}")
+                    content = data["choices"][0]["message"]["content"]
+                    if json_mode:
+                        return json.loads(content)
+                    return content
+                else:
+                    error_text = response.text
+                    print(
+                        f"API error (attempt {attempt + 1}, "
+                        f"{base_url}): {response.status_code} - "
+                        f"{error_text[:200]}"
+                    )
+            except requests.Timeout:
+                print(f"Timeout (attempt {attempt + 1}, {base_url})")
+            except Exception as e:
+                print(f"Error (attempt {attempt + 1}, {base_url}): {e}")
+
+            if attempt < self.max_retries - 1:
+                time.sleep(2 ** attempt)
+
+        return None
 
 
 class LLMJudgeCaptionLLMScorer(BaseScorer):
+    """
+    Flow:
+      1) captioner: audio_path -> target_caption (audio-only, no prompt text)
+      2) judge: uses (source_caption, target_caption) + sample kwargs for prompt templates you write
+    """
+
     def __init__(
         self,
         *,
         name: str,
-        captioner_model_ref: str = "",
-        judge_model_ref: str = "",
-        global_models: dict[str, Any] | None = None,
-        caption_decode_kwargs: dict[str, Any] | None = None,
-        judge_decode_kwargs: dict[str, Any] | None = None,
-        num_workers: int = 4,
+        captioner: dict,
+        judge_model: dict,
+        batch_size: int = 8,
         **kwargs: Any,
     ) -> None:
-        super().__init__(name=name)
-        self.num_workers = num_workers
-        self.caption_decode_kwargs = dict(caption_decode_kwargs or {})
-        self.judge_decode_kwargs = dict(judge_decode_kwargs or {})
+        super().__init__(name=name, **kwargs)
+        self.captioner_client = VLLMClient(**captioner)
+        self.judge_client = VLLMClient(**judge_model)
+        self.batch_size = batch_size
 
-        models = global_models or {}
+    def _infer_one(self, sample: dict[str, Any], system_prompt: str, user_prompt: jinja2.Template, score_key: str) -> dict[str, Any]:
+        sid = sample["sample_id"]
+        try:
+            target_caption_gen_now = self.captioner_client.chat_completion(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "audio_url", "audio_url": {"url": f"file://" + sample["eval_audio_path"]}},
+                        ],
+                    }
+                ],
+                **self.task_cfg.get("caption_decode_kwargs", {})
+            )
+            
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt.render(target_caption_gen_now=target_caption_gen_now, **sample)}
+            ]
 
-        cap = dict(models.get(captioner_model_ref, {}))
-        self.captioner_endpoint: str = str(cap.get("base_url", "")).rstrip("/") + "/chat/completions"
-        self.captioner_model: str = str(cap.get("model", ""))
-        self.captioner_headers: dict[str, str] = dict(cap.get("headers", {}))
-        self.captioner_model_decode_kwargs: dict[str, Any] = dict(cap.get("decode_kwargs", {}))
-        _cap_key = str(cap.get("api_key", ""))
-        if _cap_key and "Authorization" not in self.captioner_headers:
-            self.captioner_headers["Authorization"] = f"Bearer {_cap_key}"
-        self.captioner_headers.setdefault("Content-Type", "application/json")
+            judge_resp: dict = self.judge_client.chat_completion(
+                messages=messages,
+                json_mode=True,
+                **self.task_cfg.get("judge_decode_kwargs", {})
+            )
 
-        jdg = dict(models.get(judge_model_ref, {}))
-        self.judge_endpoint: str = str(jdg.get("base_url", "")).rstrip("/") + "/chat/completions"
-        self.judge_model: str = str(jdg.get("model", ""))
-        self.judge_headers: dict[str, str] = dict(jdg.get("headers", {}))
-        self.judge_model_decode_kwargs: dict[str, Any] = dict(jdg.get("decode_kwargs", {}))
-        _jdg_key = str(jdg.get("api_key", ""))
-        if _jdg_key and "Authorization" not in self.judge_headers:
-            self.judge_headers["Authorization"] = f"Bearer {_jdg_key}"
-        self.judge_headers.setdefault("Content-Type", "application/json")
-
-    def _resolve_task(self) -> tuple[str, str, str, dict[str, Any], dict[str, Any]]:
-        prompts = _require_key(self.task_cfg, "prompts", "tasks.<type>.scorers[]")
-        system_prompt = str(_require_key(prompts, "system", "tasks.<type>.scorers[].prompts"))
-        user_prompt = str(_require_key(prompts, "user", "tasks.<type>.scorers[].prompts"))
-        caption_prompt = str(_require_key(self.task_cfg, "caption_prompt", "tasks.<type>.scorers[]"))
-        caption_decode_kwargs = dict(self.task_cfg.get("caption_decode_kwargs") or {})
-        judge_decode_kwargs = dict(self.task_cfg.get("judge_decode_kwargs") or {})
-        return system_prompt, user_prompt, caption_prompt, caption_decode_kwargs, judge_decode_kwargs
-
-    def _call_api(self, endpoint: str, model: str, headers: dict, base_decode: dict, extra_decode: dict, messages: list) -> str:
-        payload = {"model": model, "messages": messages, "stream": False, **base_decode, **extra_decode}
-        resp = requests.post(endpoint, headers=headers, json=payload)
-        resp.raise_for_status()
-        data = resp.json()
-        if isinstance(data, dict):
-            if "choices" in data and data["choices"]:
-                return str(data["choices"][0].get("message", {}).get("content", ""))
-            if "content" in data:
-                return str(data["content"])
-            if "text" in data:
-                return str(data["text"])
-        return json.dumps(data, ensure_ascii=False)
-
-    def _caption_audio(self, audio_path: str, sample: dict[str, Any], caption_prompt_template: str, extra_decode: dict[str, Any]) -> str:
-        context = {**sample, "sample_json": json.dumps(sample, ensure_ascii=False)}
-        messages = [{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": render_template(caption_prompt_template, context)},
-                {"type": "audio_url", "audio_url": {"url": f"file://{audio_path}"}},
-            ],
-        }]
-        return self._call_api(
-            self.captioner_endpoint, self.captioner_model, self.captioner_headers,
-            self.captioner_model_decode_kwargs, {**self.caption_decode_kwargs, **extra_decode}, messages,
-        ).strip()
-
-    def _infer_one(self, sample: dict[str, Any]) -> dict[str, Any]:
-        sid = str(sample["sample_id"])
-        system_tmpl, user_tmpl, caption_tmpl, task_cap_decode, task_jdg_decode = self._resolve_task()
-
-        caption_a = self._caption_audio(str(sample["audio_path"]), sample, caption_tmpl, task_cap_decode)
-        caption_b = self._caption_audio(str(sample["eval_audio_path"]), sample, caption_tmpl, task_cap_decode)
-
-        context = {**sample, "sample_json": json.dumps(sample, ensure_ascii=False), "caption_a": caption_a, "caption_b": caption_b}
-        judge_messages = [
-            {"role": "system", "content": render_template(system_tmpl, context)},
-            {"role": "user", "content": render_template(user_tmpl, context)},
-        ]
-        judge_raw = self._call_api(
-            self.judge_endpoint, self.judge_model, self.judge_headers,
-            self.judge_model_decode_kwargs, {**self.judge_decode_kwargs, **task_jdg_decode}, judge_messages,
-        )
-        return {"sample_id": sid, "caption_a": caption_a, "caption_b": caption_b, "judge_raw": judge_raw}
+            return {
+                "sample_id": sid,
+                "valid": True,
+                "score": judge_resp[score_key],
+                "reason": judge_resp.get("reason", ""),
+                "judge_resp": judge_resp
+            }
+        except Exception as e:
+            return {
+                "sample_id": sid,
+                "valid": False,
+                "score": None,
+                "reason": f"llm_infer_exception: {e}",
+                "judge_resp": None,
+            }
 
     def run(self, samples: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        workers = int(self.task_cfg.get("num_workers", self.num_workers))
-
-        inferences: dict[str, dict[str, Any]] = {}
-        errors: dict[str, str] = {}
-        with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
-            futures = {ex.submit(self._infer_one, s): s for s in samples}
-            for future in tqdm(as_completed(futures), total=len(futures), desc=f"{self.name} [infer]", leave=False):
-                sid = str(futures[future]["sample_id"])
-                try:
-                    inferences[sid] = future.result()
-                except Exception as exc:
-                    errors[sid] = str(exc)
-
         rows: list[dict[str, Any]] = []
-        for sample in tqdm(samples, desc=f"{self.name} [score]", leave=False):
-            sid = str(sample["sample_id"])
-            if sid in errors:
-                rows.append(self.make_result(sample_id=sid, score=None, valid=False, error="llm_judge_caption_llm_infer_failed", reason=errors[sid]))
+
+        system_prompt = self.task_cfg["system_prompt"]
+        user_prompt = jinja2.Template(self.task_cfg["user_prompt"])
+        score_key = self.task_cfg.get("score_key", "score")
+
+        for res in tqdm(joblib.Parallel(n_jobs=self.batch_size, backend="threading", return_as="generator")(
+            joblib.delayed(self._infer_one)(sample, system_prompt, user_prompt, score_key) for sample in samples
+        ), total=len(samples), desc=f"{self.name} [infer & score]", leave=False):
+
+            if not res["valid"]:
+                rows.append(
+                    self.make_result(
+                        sample_id=res["sample_id"],
+                        score=None,
+                        valid=False,
+                        error="llm_judge_caption_llm_infer_failed",
+                        reason=res["reason"],
+                        extra={"judge_resp": res.get("judge_resp", None)},
+                    )
+                )
                 continue
-            res = inferences[sid]
-            judge_raw = res["judge_raw"]
-            try:
-                parsed = try_parse_json(judge_raw)
-                if parsed is None:
-                    raise RuntimeError(f"judge did not return valid JSON: {judge_raw}")
-                valid = coerce_bool(_require_key(parsed, "valid", "judge_json"))
-                if valid is None:
-                    raise RuntimeError("cannot coerce `valid` to bool")
-                reason = str(_require_key(parsed, "reason", "judge_json"))
-                score = _clamp01(float(parsed["score"])) if "score" in parsed else (1.0 if valid else 0.0)
-                rows.append(self.make_result(
-                    sample_id=sid, score=score, valid=bool(valid), reason=reason,
-                    extra={"caption_a": res["caption_a"], "caption_b": res["caption_b"], "judge_raw": judge_raw},
-                ))
-            except Exception as exc:
-                rows.append(self.make_result(sample_id=sid, score=None, valid=False, error="llm_judge_caption_llm_score_failed", reason=str(exc)))
+
+            score = res["score"]
+            rows.append(
+                self.make_result(
+                    sample_id=res["sample_id"],
+                    score=score,
+                    valid=bool(res["valid"]),
+                    reason=res["reason"],
+                    extra={"judge_resp": res.get("judge_resp", None)},
+                )
+            )
 
         return self.finalize(rows)

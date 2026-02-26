@@ -18,7 +18,8 @@ from local_split.jsonl_parallel_runner import JsonlParallelRunner
 from local_eval.speech.rir import apply_rir
 
 random.seed(7)
-
+MAX_DURATION = os.environ.get("MAX_DURATION", 15.0) # set max duration to 15s by default, can be configured by env var
+MIN_DURATION = os.environ.get("MIN_DURATION", 5.0) # set min duration to 3s by default, can be configured by env var
 warnings.filterwarnings("ignore")
 
 def safe_load(path, sr=None):
@@ -85,14 +86,23 @@ def preprocess_and_sample(input_jsonl, output_jsonl, k):
                 data = json.loads(line)
                 duration = data['duration']
                 text = data['text']
-                data["id"] = data.pop("utt_id") #<- re-name
-                if duration < 3.0 or len(text.split()) < 3:
+                if "utt_id" in data:
+                    data["id"] = data.pop("utt_id") #<- re-name
+                elif "id" in data:
+                    pass
+                elif "example_id" in data:
+                    data["id"] = data.pop("example_id") #<- re-name
+                else:
+                    raise ValueError("No valid ID field found in data")
+
+                if duration < 2.0 or len(text.split()) < 3:
                     continue
-                if duration > 10.0:
+                if duration > MAX_DURATION or duration < MIN_DURATION:
                     continue
+
                 buckets[int(duration)].append(line)
             except Exception:
-                continue
+                raise
 
     total_available = sum(len(b) for b in buckets.values())
     if total_available <= k:
@@ -121,6 +131,7 @@ def preprocess_and_sample(input_jsonl, output_jsonl, k):
                     continue
             bucket_idx += 1
                 
+    print(f"Sampled {len(sampled_lines)} lines from {total_available} available lines.")
     with open(output_jsonl, 'w', encoding='utf-8') as f:
         for line in sampled_lines:
             f.write(line)
@@ -232,6 +243,7 @@ def process_transcription(idx, line, cat_name, params, llm_client, judge_client,
             data['edit_prompt'] # Using edit_prompt directly
         )
         if not is_valid:
+            # print(f"{data['text']=}", f"{data['target_text']=}", f"{data['edit_prompt']=}", reason)
             return None
         data['judge_reason'] = reason
 

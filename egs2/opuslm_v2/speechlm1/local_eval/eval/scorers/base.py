@@ -40,8 +40,7 @@ def summarize_metric_rows(
         "errors": errors,
     }
     for key in score_keys:
-        avg_label = "avg_score" if key == "score" else f"avg_{key}"
-        result[avg_label] = safe_mean(key_scores[key])
+        result[f"avg_{key}"] = safe_mean(key_scores[key])
     return result
 
 
@@ -67,14 +66,6 @@ def try_parse_json(text: str) -> dict[str, Any] | None:
         except json.JSONDecodeError:
             return None
     return None
-
-
-def render_template(template: str, context: dict[str, Any]) -> str:
-    try:
-        from jinja2 import Template
-    except ModuleNotFoundError:
-        return template
-    return Template(template).render(**context)
 
 def coerce_bool(value: Any) -> bool | None:
     if isinstance(value, bool):
@@ -109,9 +100,10 @@ def extract_first_float(value: Any) -> float | None:
 class BaseScorer(ABC):
     score_keys = ["score"]
 
-    def __init__(self, *, name: str, **kwargs: Any) -> None:
+    def __init__(self, *, name: str, resume: bool = True, **kwargs: Any) -> None:
         self.name = name
         self.task_cfg: dict[str, Any] = {}
+        self.resume: bool = resume
 
     def configure_task(self, task_cfg: dict[str, Any] | None) -> None:
         self.task_cfg = dict(task_cfg or {})

@@ -45,6 +45,9 @@ export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:/mnt/home/xungong-and
 
 export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:/mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/test_clean/speech_edit/dialogues/data.yaml"
 export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:/mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/test_clean/audio_edit/dialogues/data.yaml"
+export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:/mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/test_clean/speech_edit-short/dialogues/data.yaml"
+export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:/mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/test_clean/speech_edit-short/dialogues/data.yaml"
+export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:/mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/test_clean/freeform-edit/dialogues/data.yaml"
 
 # NOTE(Jinchuan): For DeltaAI users, un-comment this for network setup
 # export NCCL_DEBUG=WARN

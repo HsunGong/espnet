@@ -21,7 +21,7 @@ class SpeedDurationScorer(BaseScorer):
         return value
 
     def __init__(self, *, name: str, relative_tolerance: float = 0.15, **kwargs: Any) -> None:
-        super().__init__(name=name)
+        super().__init__(name=name, **kwargs)
         self.relative_tolerance = relative_tolerance
 
     def _extract_speed_factor(self, sample: dict[str, Any]) -> float | None:

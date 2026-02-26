@@ -61,16 +61,16 @@ CV3_SUPPORTED_TOKENS = {
 # Map input paralinguistic tags → closest CV3-supported token
 PARA_TAG_MAP = {
     "[sigh]":                "[sigh]",           # direct
-    "[laugh]":               "[laughter]",        # remap
+    "[laugh]":               "ha ha,",        # remap
     "[exhale]":              "[breath]",          # closest
     "[snort]":               "[hissing]",         # closest
     "[cough]":               "[cough]",           # direct
     "[uhm]":                 "[mn]",              # filler → mn
-    "[Surprise-oh]":         "[vocalized-noise]",
-    "[Surprise-wa]":         "[vocalized-noise]",
-    "[Dissatisfaction-hnn]": "[mn]",
-    "[Question-ah]":         "[vocalized-noise]",
-    "[Question-yi]":         "[vocalized-noise]",
+    "[Surprise-oh]":         "ohh!",
+    "[Surprise-wa]":         "wow!",
+    "[Dissatisfaction-hnn]": "hmm...",
+    "[Question-ah]":         "ah?",
+    "[Question-yi]":         "yi?",
 }
 
 # ---------------------------------------------------------------------------
@@ -473,6 +473,12 @@ def process_jsonl():
                 save_audio_path = os.path.abspath(
                     os.path.join(save_dir, f"{utt_id}.wav")
                 )
+
+                if os.path.exists(save_audio_path):
+                    print(f"[{utt_id}] Output already exists at {save_audio_path}. Skipped.")
+                    fscp.write(f"{utt_id}\t{save_audio_path}\n")
+                    fscp.flush()
+                    continue
 
                 try:
                     audio, sr = run_inference(model, mode, cv3_params)

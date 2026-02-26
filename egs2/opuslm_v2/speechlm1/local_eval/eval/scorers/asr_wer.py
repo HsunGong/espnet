@@ -44,14 +44,14 @@ class ASRWERScorer(BaseScorer):
         name: str,
         model_name: str = "openai/whisper-large-v3",
         # assistant_model_name: str | None = "distil-whisper/distil-large-v2",
-        device: str | None = None,
+        device: str = "cuda",
         torch_dtype: str = "bfloat16",
         language: str = "english",
         batch_size: int = 8,
         gen_kwargs: dict = {},
         **kwargs: Any,
     ) -> None:
-        super().__init__(name=name)
+        super().__init__(name=name, **kwargs)
 
         from transformers import (
             WhisperForCausalLM,
@@ -63,8 +63,7 @@ class ASRWERScorer(BaseScorer):
         self.batch_size = batch_size
         self.gen_kwargs = gen_kwargs
 
-
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = device
         self.torch_dtype = torch.bfloat16 if torch_dtype == "bfloat16" else torch.float32
 
         self.processor = WhisperProcessor.from_pretrained(model_name)
@@ -186,7 +185,7 @@ class ASRWERScorer(BaseScorer):
                     word_out.deletions,
                     word_out.insertions,
                 )
-                wer_value = word_out.wer * 100
+                wer_value = word_out.wer
 
                 edit_acc = []
                 for ori_word, ref_word in edit_words:
@@ -199,11 +198,11 @@ class ASRWERScorer(BaseScorer):
 
                 scored_rows.append(self.make_result(
                     sample_id=sample_id,
-                    score=wer_value * 100,
+                    score=wer_value,
                     valid=True,
-                    reason=f"WER={wer_value*100:.2f}% C={C} S={S} D={D} I={I}",
+                    reason=f"WER={wer_value:.2f}% C={C} S={S} D={D} I={I}",
                     extra={
-                        # "wer": wer_value * 100,
+                        "wer": wer_value,
                         "hits": C,
                         "substitutions": S,
                         "deletions": D,
@@ -229,7 +228,11 @@ class ASRWERScorer(BaseScorer):
             summary["submetric_avg"][k] = sum(v for v in all_values if v)
 
         # recompute wer (S + D + I) / (H + S + D)
-        summary["submetric_avg"]["wer"] = 100 * (summary["submetric_avg"]["substitutions"] + summary["submetric_avg"]["deletions"] + summary["submetric_avg"]["insertions"]) / (summary["submetric_avg"]["hits"] + summary["submetric_avg"]["substitutions"] + summary["submetric_avg"]["deletions"])
-
-        summary["avg_score"] = summary["submetric_avg"]["wer"]
+        try:
+            summary["submetric_avg"]["wer"] = 100 * (summary["submetric_avg"]["substitutions"] + summary["submetric_avg"]["deletions"] + summary["submetric_avg"]["insertions"]) / (summary["submetric_avg"]["hits"] + summary["submetric_avg"]["substitutions"] + summary["submetric_avg"]["deletions"])
+        except:
+            summary["submetric_avg"]["wer"] = "N/A (no samples)"
+    
+        summary["avg_wer"] = summary["submetric_avg"]["wer"]
+        summary["avg_edit_acc"] = summary["submetric_avg"]["edit_acc"] / len(scored_rows) if scored_rows else "N/A"
         return rows, summary

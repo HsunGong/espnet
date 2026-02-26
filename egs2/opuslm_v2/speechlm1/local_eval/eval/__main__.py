@@ -14,44 +14,35 @@ from joblib import Parallel, delayed
 from .scorers.asr_wer import ASRWERScorer
 from .scorers.llm_judge_caption_llm import LLMJudgeCaptionLLMScorer
 from .scorers.llm_judge_gemini import LLMJudgeGeminiScorer
+from .scorers.llm_judge_openai import LLMJudgeOpenAIScorer
 from .scorers.speed_duration import SpeedDurationScorer
 from .scorers.volume_loudness import VolumeLoudnessScorer
 from .scorers.pitch_shift import PitchShiftScorer
 from .scorers.pseudo_mos import PseudoMOSScorer
 from .scorers.emotion_modelscope import EmotionModelscopeScorer
 from .scorers.speaker_similarity_wespeaker import SpeakerSimilarityWespeakerScorer
+from .scorers.speaker_similarity_wavlm import SpeakerSimilarityWavlmScorer
+from .scorers.fad import FADScorer
 
 SCORER_CLASSES = {
     "asr_wer": ASRWERScorer,
     "llm_judge_caption_llm": LLMJudgeCaptionLLMScorer,
     "llm_judge_gemini": LLMJudgeGeminiScorer,
+    "llm_judge_openai": LLMJudgeOpenAIScorer,
     "speed_duration": SpeedDurationScorer,
     "volume_loudness": VolumeLoudnessScorer,
     "pitch_shift": PitchShiftScorer,
     "pseudo_mos": PseudoMOSScorer,
     "emotion_modelscope": EmotionModelscopeScorer,
     "speaker_similarity_wespeaker": SpeakerSimilarityWespeakerScorer,
+    "speaker_similarity_wavlm": SpeakerSimilarityWavlmScorer,
+    "fad": FADScorer,
 }
 
 def run_scorer(scorer, task_cfg, samples):
     scorer.configure_task(task_cfg)
     rows, summary = scorer.run(samples)
     return scorer.name, rows, summary
-
-DEFAULT_TASK_SCORERS: dict[str, list[str]] = {
-    "transcription_ins": ["asr_wer", "speaker_similarity_wespeaker"],
-    "transcription_del": ["asr_wer", "speaker_similarity_wespeaker"],
-    "transcription_sub": ["asr_wer", "speaker_similarity_wespeaker"],
-    "transcription_replace_sentence": ["asr_wer", "speaker_similarity_wespeaker"],
-    "transcription_add_paralinguistic": ["asr_wer", "speaker_similarity_wespeaker"],
-    "style_whisper": ["llm_judge_caption_llm", "asr_wer"],
-    "style_emotion": ["llm_judge_caption_llm", "asr_wer"],
-    "audio_effect_speed": ["speed_duration"],
-    "audio_effect_volume": ["volume_loudness"],
-    "audio_effect_pitch": ["pitch_shift"],
-    "audio_effect_reverb": ["llm_judge_gemini", "llm_judge_caption_llm"],
-    "audio_effect_dereverb": ["asr_wer"],
-}
 
 # region: utils
 _ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
@@ -146,36 +137,22 @@ def build_samples(
     return samples, stats
 
 def print_task_summary(task_type: str, summaries: dict[str, dict[str, Any]], output_path: str | Path) -> None:
-    print(f"\n[{task_type}] -> {output_path}")
+    # with green color
+    tqdm.write(f"\n\033[32m[{task_type}] -> {output_path}\033[0m")
     for scorer_name, summary in summaries.items():
-        avg_score = summary["avg_score"] if "avg_score" in summary else None
-        avg_str = "N/A" if avg_score is None else f"{avg_score:.4f}"
-        valid = int(summary["valid"]) if "valid" in summary else 0
-        total = int(summary["total"]) if "total" in summary else 0
-        errors = int(summary["errors"]) if "errors" in summary else 0
-        print(f"  - {scorer_name}: avg={avg_str} valid={valid}/{total} errors={errors}")
-        if "high_accuracy" in summary or "low_accuracy" in summary:
-            high = summary["high_accuracy"] if "high_accuracy" in summary else None
-            low = summary["low_accuracy"] if "low_accuracy" in summary else None
-            high_str = "N/A" if high is None else f"{float(high):.4f}"
-            low_str = "N/A" if low is None else f"{float(low):.4f}"
-            print(f"    emotion: high_acc={high_str} low_acc={low_str}")
-        if "avg_hyp_similarity" in summary or "avg_ref_similarity" in summary:
-            hyp = summary["avg_hyp_similarity"] if "avg_hyp_similarity" in summary else None
-            ref = summary["avg_ref_similarity"] if "avg_ref_similarity" in summary else None
-            hyp_str = "N/A" if hyp is None else f"{float(hyp):.4f}"
-            ref_str = "N/A" if ref is None else f"{float(ref):.4f}"
-            print(f"    speaker: hyp_sim={hyp_str} ref_sim={ref_str}")
-        if "submetric_avg" in summary and isinstance(summary["submetric_avg"], dict):
-            submetric_avg = summary["submetric_avg"]
-            if submetric_avg:
-                items = []
-                for k, v in sorted(submetric_avg.items()):
-                    if v is None:
-                        items.append(f"{k}=N/A")
-                    else:
-                        items.append(f"{k}={float(v):.3f}")
-                print(f"    submetrics: {' '.join(items)}")
+        valid = summary.get("valid", None)
+        total = summary.get("total", None)
+        errors = summary.get("errors", None)
+        tqdm.write(f"\033[32m>> {scorer_name}: valid={valid}/{total} errors={errors}\033[0m")
+        tqdm.write("\033[34m" + str([f"{k}: {v}" for k, v in summary.items() if k.startswith("avg_")]) + "\033[0m")
+
+        if "submetric_avg" not in summary:
+            continue
+        if not isinstance(summary["submetric_avg"], dict):
+            continue
+        tqdm.write("submetrics " + str(summary["submetric_avg"]))
+    tqdm.write("\n")
+
 
 def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
@@ -245,21 +222,6 @@ def get_task_configs(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
         raise ValueError("tasks must be a mapping")
     return {str(k): dict(v or {}) for k, v in tasks_cfg.items()}
 
-def build_default_task_configs(
-    metadata_by_type: dict[str, dict[str, dict[str, Any]]],
-    scp_by_type: dict[str, dict[str, str]],
-) -> dict[str, dict[str, Any]]:
-    available = sorted(set(metadata_by_type).intersection(set(scp_by_type)))
-    task_cfg: dict[str, dict[str, Any]] = {}
-    for task_type in available:
-        if task_type in DEFAULT_TASK_SCORERS:
-            scorers = DEFAULT_TASK_SCORERS[task_type]
-        else:
-            scorers = []
-        if scorers:
-            task_cfg[task_type] = {"scorers": [{"name": name} for name in scorers]}
-    return task_cfg
-
 def collect_used_scorers(tasks_cfg: dict[str, dict[str, Any]]) -> list[str]:
     names: list[str] = []
     seen: set[str] = set()
@@ -290,8 +252,16 @@ def main() -> None:
     parser.add_argument(
         "--resume",
         action="store_true",
-        default=False,
+        default=True,
         help="If set, skip tasks whose output .results file already exists and reload their summary.",
+    )
+    parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        default=False,
+        # override with --resume
+        dest="resume",
+        help="If set, do not resume and always re-run all scorers even if cache files are found.",
     )
     args = parser.parse_args()
 
@@ -301,17 +271,11 @@ def main() -> None:
         runtime_cfg = config["runtime"]
     else:
         runtime_cfg = {}
-    if "use_default_task_mapping" in runtime_cfg:
-        use_default_task_mapping = bool(runtime_cfg["use_default_task_mapping"])
-    else:
-        use_default_task_mapping = False
 
     metadata_by_type = load_metadata_by_type(args.metadata)
     scp_by_type = load_scp_by_type(args.data_dir)
 
     tasks_cfg = get_task_configs(config)
-    if not tasks_cfg and use_default_task_mapping:
-        tasks_cfg = build_default_task_configs(metadata_by_type, scp_by_type)
     if not tasks_cfg:
         raise RuntimeError("No tasks configured. Please set `tasks` in YAML.")
 
@@ -326,6 +290,7 @@ def main() -> None:
 
     used_scorers = collect_used_scorers(tasks_cfg)
     scorers_dict = {}
+
     for scorer_name in used_scorers:
         print(f"Initializing scorer: {scorer_name}")
         scorer_cls = SCORER_CLASSES[scorer_name]
@@ -337,13 +302,19 @@ def main() -> None:
         if "use_gpu" in runtime_cfg:
             scorer_kwargs["use_gpu"] = runtime_cfg["use_gpu"]
 
-        scorer_kwargs["global_models"] = config.get("models", {})
-        scorers_dict[scorer_name] = scorer_cls(name=scorer_name, **scorer_kwargs)
+        # Per-scorer resume from YAML config overrides args.resume.
+        # If scorer config explicitly sets resume=false, honour it even when --resume is on.
+        if "resume" not in scorer_kwargs:
+            print("Set resume flag to", args.resume)
+            scorer_kwargs["resume"] = args.resume
+
+        scorer_instance = scorer_cls(name=scorer_name, **scorer_kwargs)
+        scorers_dict[scorer_name] = scorer_instance
         logging.debug(f"Initialized scorer: {scorer_name} with args: {scorer_kwargs}")
 
 
     type_list = list(tasks_cfg.keys())
-    print(f"Configured tasks: {', '.join(type_list)}")
+    print(f"\033[32mConfigured tasks", ', '.join(type_list), output_dir, "\033[0m")
 
     full_results = []
     for task_type in tqdm(type_list, desc="tasks"):
@@ -359,15 +330,6 @@ def main() -> None:
             continue
 
         output_path = output_dir / f"{task_type}.results"
-
-        if args.resume and output_path.exists():
-            cached_summary = load_summary(output_path)
-            if cached_summary is not None:
-                print(f"[resume] Skipping task {task_type}: output already exists at {output_path}")
-                full_results.append((task_type, cached_summary, output_path))
-                continue
-            else:
-                print(f"[resume] No summary file found for {task_type}, re-running...")
 
         samples, stats = build_samples(task_type, metadata_by_type, scp_by_type)
         print(
@@ -396,17 +358,52 @@ def main() -> None:
 
         task_summaries: dict[str, dict[str, Any]] = {}
         
-        scorer_instances = []
+        scorer_instances_to_run: list[tuple[Any, dict[str, Any]]] = []
         for scorer_entry in scorer_entries:
-            scorer_instances.append((scorers_dict[scorer_entry["name"]], scorer_entry))
+            scorer_name = scorer_entry["name"]
+            scorer_rows_cache = output_dir / f"{task_type}.{scorer_name}.rows.jsonl"
+            scorer_summary_cache = output_dir / f"{task_type}.{scorer_name}.summary.json"
 
-        results = Parallel(n_jobs=runtime_cfg.get("num_workers", 4), prefer="threads")(
-            delayed(run_scorer)(inst, entry, samples)
-            for inst, entry in scorer_instances
-        )
+            # Determine effective resume for this scorer:
+            # per-task entry resume > scorer instance resume > args.resume
+            # If scorer-level resume is False, never skip even when --resume is on.
+            scorer_inst = scorers_dict[scorer_name]
+            if "resume" not in scorer_entry:
+                effective_resume = scorer_inst.resume
+            else:
+                effective_resume = scorer_entry["resume"]
 
-        for scorer_name, rows, summary in results:
+            if effective_resume and scorer_rows_cache.exists() and scorer_summary_cache.exists():
+                print(f"[resume] Skipping scorer {scorer_name} for task {task_type}: cache found at {scorer_rows_cache}")
+                with scorer_summary_cache.open("r", encoding="utf-8") as _f:
+                    cached_summary = json.load(_f)
+                task_summaries[scorer_name] = cached_summary
+                for row in read_jsonl(scorer_rows_cache):
+                    sid = str(row["sample_id"])
+                    metric_payload = dict(row)
+                    metric_payload.pop("sample_id", None)
+                    metric_payload.pop("scorer", None)
+                    if sid in per_sample:
+                        per_sample[sid]["metrics"][scorer_name] = metric_payload
+                continue
+
+            if scorer_entry.get("disable", False):
+                print(f"[skip] scorer {scorer_name} for task {task_type}: disable=true")
+                continue
+
+            scorer_instances_to_run.append((scorers_dict[scorer_name], scorer_entry))
+
+        for scorer_name, rows, summary in Parallel(n_jobs=runtime_cfg.get("num_workers", 4), prefer="threads")(
+                delayed(run_scorer)(inst, entry, samples)
+                for inst, entry in scorer_instances_to_run
+            ):
             task_summaries[scorer_name] = summary
+            # Persist per-scorer cache so future runs can resume at scorer granularity
+            scorer_rows_cache = output_dir / f"{task_type}.{scorer_name}.rows.jsonl"
+            scorer_summary_cache = output_dir / f"{task_type}.{scorer_name}.summary.json"
+            write_jsonl(scorer_rows_cache, rows)
+            with scorer_summary_cache.open("w", encoding="utf-8") as _f:
+                json.dump(summary, _f, ensure_ascii=False, indent=2)
             for row in rows:
                 sid = str(row["sample_id"])
                 metric_payload = dict(row)
