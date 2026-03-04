@@ -10,11 +10,15 @@ can hear the audio and judge it in one shot.
 Task-level config keys (set per-task in YAML under the scorer entry):
     system_prompt  : str   – System prompt for the judge.
     user_prompt    : str   – Jinja2 template for the user message.
-    score_key      : str   – Key in the JSON response for the main score (default: "score").
     audio_keys     : list  – Sample field names whose values are audio file paths
                              to include in the multimodal request.
     decode_kwargs  : dict  – Extra kwargs forwarded to ``chat_completion``.
-    score_keys     : list  – Multi-dimensional score keys to track in the summary.
+
+The LLM response must be valid JSON containing numeric aspect scores
+(e.g. ``{"naturalness": 4, "audio_quality": 5, "reason": "..."}``).
+``compute_aspect_avg`` extracts all numeric keys (excluding "reason"),
+computes their mean as the main ``score``, and stores per-aspect values
+in ``extra`` so that ``summarize_metric_rows`` can report each one.
 """
 
 from __future__ import annotations
@@ -27,7 +31,7 @@ import jinja2
 import joblib
 from tqdm import tqdm
 
-from .base import BaseScorer
+from .base import BaseScorer, compute_aspect_avg, auto_detect_score_keys
 from .llm_judge_caption_llm import VLLMClient
 
 
@@ -68,52 +72,53 @@ class LLMJudgeOpenAIScorer(BaseScorer):
         sample: dict[str, Any],
         system_prompt: str,
         user_prompt: jinja2.Template,
-        score_key: str,
         audio_keys: list[str],
     ) -> dict[str, Any]:
         sid = sample["sample_id"]
         try:
             # Build multimodal user content: audio file(s) + rendered text
+            # Label each audio so the model can distinguish A/B in an AB test
+            messages: list[dict[str, Any]] = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            
+            _audio_labels = ["Audio A (original)", "Audio B (edited)"]
             content: list[dict[str, Any]] = []
-            for audio_key in audio_keys:
+            for idx, audio_key in enumerate(audio_keys):
                 audio_path = sample.get(audio_key)
                 if audio_path:
+                    label = _audio_labels[idx] if idx < len(_audio_labels) else f"Audio {idx + 1}"
+                    content.append({"type": "text", "text": f"[{label}]"})
                     content.append(
                         {
                             "type": "audio_url",
                             "audio_url": {"url": f"file://{audio_path}"},
                         }
                     )
-
             rendered_user = user_prompt.render(**sample)
             content.append({"type": "text", "text": rendered_user})
-
-            messages: list[dict[str, Any]] = []
-            if system_prompt:
-                messages.append({"role": "system", "content": system_prompt})
             messages.append({"role": "user", "content": content})
 
-            judge_resp: dict = self.client.chat_completion(
+            judge_resp = self.client.chat_completion(
                 messages=messages,
                 json_mode=True,
                 **self.task_cfg.get("decode_kwargs", {}),
             )
 
-            # Extract numeric sub-scores from the response so that
-            # ``summarize_metric_rows`` can compute averages for each.
-            extra_scores: dict[str, Any] = {}
-            if isinstance(judge_resp, dict):
-                for k, v in judge_resp.items():
-                    if k not in ("score", "reason") and isinstance(v, (int, float)):
-                        extra_scores[k] = float(v)
+            if judge_resp is None:
+                raise RuntimeError("LLM returned None (all retries exhausted)")
+
+            avg_score, aspect_scores = compute_aspect_avg(judge_resp)
+            reasoning_content = judge_resp.pop("_reasoning_content", None)
 
             return {
                 "sample_id": sid,
                 "valid": True,
-                "score": judge_resp[score_key],
+                "score": avg_score,
                 "reason": judge_resp.get("reason", ""),
                 "judge_resp": judge_resp,
-                "extra_scores": extra_scores,
+                "extra_scores": aspect_scores,
+                "reasoning_content": reasoning_content,
             }
         except Exception as e:
             logging.warning(f"[{self.name}] inference failed for {sid}: {e}")
@@ -124,6 +129,7 @@ class LLMJudgeOpenAIScorer(BaseScorer):
                 "reason": f"llm_judge_openai_exception: {e}",
                 "judge_resp": None,
                 "extra_scores": {},
+                "reasoning_content": None,
             }
 
     # ------------------------------------------------------------------
@@ -135,7 +141,6 @@ class LLMJudgeOpenAIScorer(BaseScorer):
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         system_prompt = self.task_cfg.get("system_prompt", "")
         user_prompt = jinja2.Template(self.task_cfg["user_prompt"])
-        score_key = self.task_cfg.get("score_key", "score")
         audio_keys = self.task_cfg.get("audio_keys", ["eval_audio_path"])
 
         if len(samples) > self.max_samples:
@@ -149,7 +154,7 @@ class LLMJudgeOpenAIScorer(BaseScorer):
                 return_as="generator",
             )(
                 joblib.delayed(self._infer_one)(
-                    s, system_prompt, user_prompt, score_key, audio_keys,
+                    s, system_prompt, user_prompt, audio_keys,
                 )
                 for s in samples
             ),
@@ -165,6 +170,9 @@ class LLMJudgeOpenAIScorer(BaseScorer):
                     reason=res["reason"],
                     extra={
                         "judge_resp": res["judge_resp"],
+                        **({
+                            "reasoning_content": res["reasoning_content"]
+                        } if res.get("reasoning_content") else {}),
                         **res.get("extra_scores", {}),
                     },
                     **(
@@ -176,3 +184,7 @@ class LLMJudgeOpenAIScorer(BaseScorer):
             )
 
         return self.finalize(rows)
+
+    def finalize(self, rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        self.score_keys = auto_detect_score_keys(rows)
+        return super().finalize(rows)

@@ -462,9 +462,9 @@ def process_single_sample_with_retry(
                 "id": uuid.uuid4().hex,
                 "operation": op,
                 "audio_path": str(in_wav),
-                "audio_caption": src_cap,
+                "audio_caption": src_cap, # should possible come from llm
                 "target_audio_path": str(tgt_wav),
-                "target_caption": tgt_cap,
+                "target_audio_caption": tgt_cap, # should possible come from llm
                 "edit_prompt": edit_prompt,
                 "metadata": task,
                 "judge_reason": reason,

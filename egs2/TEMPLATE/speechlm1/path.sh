@@ -18,6 +18,11 @@ export NCCL_SOCKET_IFNAME="^lo,docker,virbr,vmnet,vboxnet"
 # NOTE(Jinchuan): avoid pytorch memory segmentation
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
+# NOTE(Jinchuan): For DeltaAI users, un-comment this for network setup
+# export NCCL_DEBUG=WARN
+# export NCCL_SOCKET_IFNAME=hsn
+# module load nccl # loads the nccl built with the AWS nccl plugin for Slingshot11%  
+
 # ESPNET_DATASET_REGISTRY=
 # # NOTE(Jinchuan): selectively enable this for wavlab internal usage.
 # if [[ "$(hostname)" == dt* ]] || [[ "$(hostname)" == gh* ]] || [[ "$(hostname)" == gpu* ]] ; then # For Delta/DeltaAI
@@ -49,7 +54,8 @@ export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:/mnt/home/xungong-and
 export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:/mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/test_clean/speech_edit-short/dialogues/data.yaml"
 export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:/mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/test_clean/freeform-edit/dialogues/data.yaml"
 
-# NOTE(Jinchuan): For DeltaAI users, un-comment this for network setup
-# export NCCL_DEBUG=WARN
-# export NCCL_SOCKET_IFNAME=hsn
-# module load nccl # loads the nccl built with the AWS nccl plugin for Slingshot11%  
+export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:data/test_clean/audio_edit-v2/dialogues/data.yaml"
+export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:data/train_clean/audio_edit-v2/dialogues/data.yaml"
+export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:data/part4/speech_edit-v2/with_audio/dialogues/data.yaml"
+
+# source path.sh && python local_anal/count_dataset_samples.py

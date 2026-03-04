@@ -12,6 +12,7 @@ import logging
 from joblib import Parallel, delayed
 
 from .scorers.asr_wer import ASRWERScorer
+from .scorers.audio_event_flam import AudioEventFLAMScorer
 from .scorers.llm_judge_caption_llm import LLMJudgeCaptionLLMScorer
 from .scorers.llm_judge_gemini import LLMJudgeGeminiScorer
 from .scorers.llm_judge_openai import LLMJudgeOpenAIScorer
@@ -23,9 +24,11 @@ from .scorers.emotion_modelscope import EmotionModelscopeScorer
 from .scorers.speaker_similarity_wespeaker import SpeakerSimilarityWespeakerScorer
 from .scorers.speaker_similarity_wavlm import SpeakerSimilarityWavlmScorer
 from .scorers.fad import FADScorer
+from .scorers.clap_similarity import CLAPSimilarityScorer
 
 SCORER_CLASSES = {
     "asr_wer": ASRWERScorer,
+    "audio_event_flam": AudioEventFLAMScorer,
     "llm_judge_caption_llm": LLMJudgeCaptionLLMScorer,
     "llm_judge_gemini": LLMJudgeGeminiScorer,
     "llm_judge_openai": LLMJudgeOpenAIScorer,
@@ -37,6 +40,7 @@ SCORER_CLASSES = {
     "speaker_similarity_wespeaker": SpeakerSimilarityWespeakerScorer,
     "speaker_similarity_wavlm": SpeakerSimilarityWavlmScorer,
     "fad": FADScorer,
+    "clap_similarity": CLAPSimilarityScorer,
 }
 
 def run_scorer(scorer, task_cfg, samples):
@@ -88,16 +92,17 @@ def load_metadata_by_type(metadata_input: str | Path) -> dict[str, dict[str, dic
 
     by_type: dict[str, dict[str, dict[str, Any]]] = {}
     for file_path in files:
-        fallback_type = file_path.stem
+        # Always use filename stem as the task type key so that the grouping
+        # matches the corresponding .scp filename.  The per-record `edit_type`
+        # field is preserved inside each sample dict but is NOT used for
+        # grouping — mix files (e.g. music_add_mix.jsonl) contain records
+        # with heterogeneous edit_type values.
+        task_type = file_path.stem
         for row in read_jsonl(file_path):
             sample_id = infer_sample_id(row)
             if not sample_id:
                 continue
             row["id"] = sample_id
-            if "edit_type" in row and row["edit_type"]:
-                task_type = str(row["edit_type"])
-            else:
-                task_type = fallback_type
             by_type.setdefault(task_type, {})[sample_id] = row
     return by_type
 
@@ -272,6 +277,9 @@ def main() -> None:
     else:
         runtime_cfg = {}
 
+    # ------------------------------------------------------------------
+    # Step 1: Load metadata & scp to discover which task types have data
+    # ------------------------------------------------------------------
     metadata_by_type = load_metadata_by_type(args.metadata)
     scp_by_type = load_scp_by_type(args.data_dir)
 
@@ -285,10 +293,38 @@ def main() -> None:
         if not tasks_cfg:
             raise RuntimeError(f"No tasks matched --types={args.types}")
 
+    # ------------------------------------------------------------------
+    # Step 2: Filter tasks — keep only those that have both metadata AND
+    #         scp data available, and are not disabled / have scorers.
+    # ------------------------------------------------------------------
+    active_tasks_cfg: dict[str, dict[str, Any]] = {}
+    for task_type, task_entry in tasks_cfg.items():
+        if "disabled" in task_entry and bool(task_entry["disabled"]):
+            print(f"Skip task {task_type}: disabled=true")
+            continue
+        if task_type not in metadata_by_type:
+            print(f"Skip task {task_type}: missing metadata")
+            continue
+        if task_type not in scp_by_type:
+            print(f"Skip task {task_type}: missing {task_type}.scp")
+            continue
+        scorer_entries = normalize_scorer_entries(task_entry.get("scorers"))
+        if not scorer_entries:
+            print(f"Skip task {task_type}: no scorers configured")
+            continue
+        active_tasks_cfg[task_type] = task_entry
+
+    if not active_tasks_cfg:
+        print("No active tasks found (all skipped due to missing data or config).")
+        return
+
     output_dir = Path(args.output_dir) if args.output_dir else Path(args.data_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    used_scorers = collect_used_scorers(tasks_cfg)
+    # ------------------------------------------------------------------
+    # Step 3: Collect & initialize only scorers needed by active tasks
+    # ------------------------------------------------------------------
+    used_scorers = collect_used_scorers(active_tasks_cfg)
     scorers_dict = {}
 
     for scorer_name in used_scorers:
@@ -313,21 +349,12 @@ def main() -> None:
         logging.debug(f"Initialized scorer: {scorer_name} with args: {scorer_kwargs}")
 
 
-    type_list = list(tasks_cfg.keys())
+    type_list = list(active_tasks_cfg.keys())
     print(f"\033[32mConfigured tasks", ', '.join(type_list), output_dir, "\033[0m")
 
     full_results = []
     for task_type in tqdm(type_list, desc="tasks"):
-        task_entry = tasks_cfg[task_type]
-        if "disabled" in task_entry and bool(task_entry["disabled"]):
-            print(f"Skip task {task_type}: disabled=true")
-            continue
-        if task_type not in metadata_by_type:
-            print(f"Skip task {task_type}: missing metadata")
-            continue
-        if task_type not in scp_by_type:
-            print(f"Skip task {task_type}: missing {task_type}.scp")
-            continue
+        task_entry = active_tasks_cfg[task_type]
 
         output_path = output_dir / f"{task_type}.results"
 
@@ -342,9 +369,6 @@ def main() -> None:
             scorer_entries = normalize_scorer_entries(task_entry["scorers"])
         else:
             scorer_entries = []
-        if not scorer_entries:
-            print(f"Skip task {task_type}: no scorers configured")
-            continue
 
         per_sample: dict[str, dict[str, Any]] = {}
         for sample in samples:

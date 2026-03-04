@@ -3,6 +3,7 @@
 export PYTHONPATH=$(pwd):$PYTHONPATH
 
 # region: speech
+
 # python local_eval/speech/step0_prepare.py # only once
 
 # if step1 changed, all need to rerun
@@ -34,29 +35,29 @@ python local_eval/speech/infer_parallel.py \
 
 python local_eval/eval_parallel.py --gpus 0,1,2,3,4,5,6,7 --max-workers-per-gpu 4 --config local_eval/eval/eval.yaml --metadata data/test_clean/speech_edit --data-dirs exp/ct-100k-default-mt/inference/*/eval-test_clean-v1-* exp/ct-100k-default-c2a/inference/*/eval-test_clean-v1-*
 
-### special part for bagpiper
+### region: special part for bagpiper
+rm data/test_clean/speech_edit/dialogues/data.yaml
 for i in data/test_clean/speech_edit/*.jsonl; do
     python local_eval/speech/assemble_dialogue.py \
     -i "$i" \
     --yaml-path data/test_clean/speech_edit/dialogues/data.yaml \
     --name-prefix eval-test_clean-v1 \
     -o data/test_clean/speech_edit/dialogues \
-    --mode cat2split1 t2a_t2a a2t_t2a
+    --mode cat2split1 t2a_t2a a2t_t2a tgt2audio
 done
 
-for i in data/test_clean/speech_edit-short/*.jsonl; do
-    python local_eval/speech/assemble_dialogue.py \
-    -i "$i" \
-    --yaml-path data/test_clean/speech_edit-short/dialogues/data.yaml \
-    --name-prefix eval-test_clean-short-v2 \
-    -o data/test_clean/speech_edit-short/dialogues \
-    --mode cat2split1 t2a_t2a a2t_t2a
-done
+# for i in data/test_clean/speech_edit-short/*.jsonl; do
+#     python local_eval/speech/assemble_dialogue.py \
+#     -i "$i" \
+#     --yaml-path data/test_clean/speech_edit-short/dialogues/data.yaml \
+#     --name-prefix eval-test_clean-short-v2 \
+#     -o data/test_clean/speech_edit-short/dialogues \
+#     --mode cat2split1 t2a_t2a a2t_t2a
+# done
 
 yq 'keys[]' data/test_clean/speech_edit/dialogues/data.yaml
 
-python3 local_eval/speech/convert_results.py --name-prefix eval-test_clean-v1 \
-  --exp-inference-dir exp/ct-100k-default-mt/inference/inference_audio_step_380000
+for dir in exp/*/inference/*; do python3 local_eval/convert_results.py --exp-inference-dir $dir --name-prefix eval-test_clean-v1 --metadata-dir data/test_clean/speech_edit ; done
 ### endregion
 
 CUDA_VISIBLE_DEVICES=1 python -m local_eval.eval --config local_eval/eval/eval.yaml --metadata data/test_clean/speech_edit --data-dir exp/stepaudiox/test_clean/speech_edit
@@ -84,30 +85,21 @@ done
 
 # region: non-speech
 
-python local_eval/non_speech/step1_gen.py --speech data/test_clean/metadata.jsonl --sound data/mmau/metadata.sound.jsonl --music data/mmau/metadata.music.jsonl -o data/test_clean/audio_edit -c ./local_eval/non_speech/gen.yaml -k 200 --nj 256
+### region: constrained-edit -> audio-edit v2
+# python local_eval/non_speech/step1_gen.py --speech data/test_clean/metadata.jsonl --sound data/mmau/metadata.sound.jsonl --music data/mmau/metadata.music.jsonl -o data/test_clean/audio_edit -c ./local_eval/non_speech/gen.yaml -k 200 --nj 256 # <- use real as target caption; do not use this please!?
+python local_eval/non_speech/step2_gen.py --speech data/train_clean/metadata.jsonl --sound audioset --sing audioset --music audioset --mode speech -c ./local_eval/non_speech/gen_v2.yaml -o data/test_clean/audio_edit-v2 -k 10 --nj 1 #<- use LLM as target caption #<- add more human_labels ???? to get CLAP or else
 
-for i in data/test_clean/audio_edit/*.jsonl; do
+rm data/test_clean/audio_edit-v2/dialogues/data.yaml
+for i in data/test_clean/audio_edit-v2/*.jsonl; do
     python local_eval/non_speech/assemble_dialogue.py \
         -i "$i" \
-        --yaml-path data/test_clean/audio_edit/dialogues/data.yaml \
-        --name-prefix eval-test_clean_mmau-v1 \
-        -o data/test_clean/audio_edit/dialogues \
-        --mode cat2split1 t2a_t2a a2t_t2a
+        --yaml-path data/test_clean/audio_edit-v2/dialogues/data.yaml \
+        --name-prefix eval-test_clean_audioset-v2 \
+        -o data/test_clean/audio_edit-v2/dialogues \
+        --mode cat2split1 t2a_t2a a2t_t2a tgt2audio
 done
 
-python local_eval/non_speech/step3_gen.py -c local_eval/non_speech/gen_v3.yaml --style_bank_size 16 --mode speech,music,sing,sound -k 1000 --nj 512 -o data/test_clean/freeform-edit --speech data/test_clean/metadata.jsonl
-
-rm data/test_clean/freeform-edit/dialogues/data.yaml
-for i in data/test_clean/freeform-edit/*.jsonl; do
-  python local_eval/non_speech/assemble_dialogue.py \
-    -i "$i" \
-    --yaml-path data/test_clean/freeform-edit/dialogues/data.yaml \
-    --name-prefix eval-test_clean_audioset-v3 \
-    -o data/test_clean/freeform-edit/dialogues \
-    --mode cat2split1 t2a_t2a a2t_t2a
-done
-
-yq 'keys[]' data/test_clean/freeform-edit/dialogues/data.yaml
+for dir in exp/*/inference/*; do python3 local_eval/convert_results.py --exp-inference-dir $dir --name-prefix eval-test_clean_audioset-v2 --metadata-dir data/test_clean/audio_edit-v2 ; done
 
 
 #### train
@@ -122,4 +114,36 @@ for i in data/train_clean/audio_edit-v2/*.jsonl; do
         --mode cat2split1 cat2main t2a_t2a a2t_t2a
 done
 
+### endregion
+
+### freeform-edit
+python local_eval/non_speech/step3_gen.py -c local_eval/non_speech/gen_v3.yaml --style_bank_size 16 --mode speech,music,sing,sound -k 1000 --nj 512 -o data/test_clean/freeform-edit --speech data/test_clean/metadata.jsonl
+
+rm data/test_clean/freeform-edit/dialogues/data.yaml
+for i in data/test_clean/freeform-edit/*.jsonl; do
+  python local_eval/non_speech/assemble_dialogue.py \
+    -i "$i" \
+    --yaml-path data/test_clean/freeform-edit/dialogues/data.yaml \
+    --name-prefix eval-test_clean_audioset-v3 \
+    -o data/test_clean/freeform-edit/dialogues \
+    --mode cat2split1 t2a_t2a a2t_t2a tgt2audio
+done
+
+yq 'keys[]' data/test_clean/freeform-edit/dialogues/data.yaml
+
+for dir in exp/*/inference/*; do python3 local_eval/convert_results.py --exp-inference-dir $dir --name-prefix eval-test_clean_audioset-v3 --metadata-dir data/test_clean/freeform-edit ; done
+
 # endregion
+
+
+# TTTDDDDD::::::: use bagpiper to generate the text (change the caption???)
+
+
+
+python local_eval/eval_parallel.py --gpus 4,5,6,7 --max-workers-per-gpu 2 --config local_eval/eval/eval.yaml --metadata data/test_clean/speech_edit --data-dirs exp/*-1000k/inference/*/eval-test_clean-v1* exp/{minguniaudioedit,stepaudiox,cv3}/test_clean/speech_edit
+
+python local_eval/eval_parallel.py --gpus 0,1,2,3,4,5,6,7 --max-workers-per-gpu 2 --config local_eval/eval/eval.yaml --metadata data/test_clean/audio_edit-v2 --data-dirs exp/*-1000k/inference/*/eval-test_clean_audioset-v2* exp/opuslm_v2_stage2_pretrain_base/inference/inference_audio_step_350000/eval-test_clean_audioset-v2-tgt2audio exp/audioldm2/test_clean/audio_edit-v2
+
+python local_eval/eval_parallel.py --gpus 0,1,2,3,4,5,6,7 --max-workers-per-gpu 2 --config local_eval/eval/eval.yaml --metadata data/test_clean/freeform-edit --data-dirs exp/*-1000k/inference/*/eval-test_clean_audioset-v3* exp/opuslm_v2_stage2_pretrain_base/inference/inference_audio_step_350000/eval-test_clean_audioset-v3-tgt2audio
+
+# python local_eval/eval_parallel.py --gpus 4,5,6,7 --max-workers-per-gpu 2 --config local_eval/eval/eval.yaml --metadata data/test_clean/speech_edit --data-dirs exp/minguniaudioedit/test_clean/speech_edit

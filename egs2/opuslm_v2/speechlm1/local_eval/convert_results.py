@@ -27,11 +27,12 @@ import os
 from collections import defaultdict
 from pathlib import Path
 
+import librosa
 import numpy as np
 import soundfile as sf
 
 # Known dialogue modes (used to split the directory name)
-KNOWN_MODES = ["a2t_t2a", "t2a_t2a", "cat2split1"]
+KNOWN_MODES = ["a2t_t2a", "t2a_t2a", "cat2split1", "tgt2audio"]
 
 
 def parse_dialogue_dir(dirname: str, name_prefix: str):
@@ -103,12 +104,21 @@ def get_audio_duration_samples(wav_path: str) -> tuple[int, int]:
     return info.frames, info.samplerate
 
 
-def truncate_and_save_wav(src_wav: str, n_frames: int, out_path: str) -> str:
+def truncate_and_save_wav(src_wav: str, _info, out_path: str) -> str | None:
     """Read src_wav, keep only the first n_frames samples, write to out_path.
 
     Returns out_path.
     """
+    n_frames = _info.frames
     data, sr = sf.read(src_wav, always_2d=False)
+    if sr != _info.samplerate:
+        n_frames = int(n_frames * _info.samplerate / sr)
+
+    new_audio_dur = (data.shape[-1] - n_frames) / sr
+    if new_audio_dur < 1.0:
+        print(f"[convert_results] Warning: {src_wav} makes bad generation with dur={new_audio_dur}, while source requires: {n_frames/sr} seconds. Remove this sample.")
+        return None
+
     if data.ndim == 1:
         truncated = data[:n_frames]
     else:
@@ -137,12 +147,13 @@ def apply_cat2split1_chunking(
 
         source_audio_path = record["audio_path"]
 
-        n_frames = sf.info(source_audio_path).frames
+        _info = sf.info(source_audio_path)
 
         # Write alongside original wav: foo.wav -> foo.chunked.wav
+        # check file valid
         out_path = str(Path(wav_path).with_suffix(".chunked.flac"))
-        truncate_and_save_wav(wav_path, n_frames, out_path)
-        result.append((example_id, out_path))
+        if truncate_and_save_wav(wav_path, _info, out_path) is not None:
+            result.append((example_id, out_path))
 
     return result
 

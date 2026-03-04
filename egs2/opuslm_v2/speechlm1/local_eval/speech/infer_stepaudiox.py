@@ -166,7 +166,7 @@ def map_jsonl_to_step_audio_params(data):
     """
     jsonl_edit_type = data.get("edit_type", "")
     kwargs = data.get("edit_kwargs", {})
-    target_text = data.get("target_text", data.get("text", ""))
+    target_text = data["target_text"]
 
     step_edit_type = None
     step_edit_info = ""

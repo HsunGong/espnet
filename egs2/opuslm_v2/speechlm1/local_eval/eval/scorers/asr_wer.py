@@ -211,7 +211,7 @@ class ASRWERScorer(BaseScorer):
                         "ref_text": ref_norm,
                         "origin_text": origin_norm,
                         "edit_words": edit_words,
-                        "edit_acc": safe_mean(edit_acc) or 1.0,
+                        "edit_acc": safe_mean(edit_acc) if edit_acc else 1.0,
                     },
                 ))
             except Exception as exc:
@@ -235,4 +235,5 @@ class ASRWERScorer(BaseScorer):
     
         summary["avg_wer"] = summary["submetric_avg"]["wer"]
         summary["avg_edit_acc"] = summary["submetric_avg"]["edit_acc"] / len(scored_rows) if scored_rows else "N/A"
+        summary["submetric_avg"]["edit_acc"] = str(summary["avg_edit_acc"] * 100) + "%"
         return rows, summary

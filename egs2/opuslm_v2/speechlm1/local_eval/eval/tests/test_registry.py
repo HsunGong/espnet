@@ -10,6 +10,7 @@ class RegistryTests(unittest.TestCase):
         for name in (
             "llm_judge_caption_llm",
             "llm_judge_gemini",
+            "llm_judge_openai",
             "pseudo_mos",
             "emotion_modelscope",
             "speaker_similarity_wespeaker",

@@ -44,11 +44,15 @@ def read_dataset_tsv(filepath: str) -> tuple[list[str], list[dict]]:
         meta = {"label", "experiment", "checkpoint", "eval_mode", "step", "n_samples"}
         metric_cols = [h for h in header if h not in meta and not h.endswith("(v/t)")]
 
+        # Skip files that don't have the expected meta columns
+        if "label" not in header or "experiment" not in header:
+            return metric_cols, []
+
         rows = []
         for raw in reader:
             row: dict = {
-                "label": raw["label"],
-                "experiment": raw["experiment"],
+                "label": raw.get("label", ""),
+                "experiment": raw.get("experiment", ""),
                 "checkpoint": raw.get("checkpoint", ""),
                 "eval_mode": raw.get("eval_mode", ""),
                 "step": raw.get("step", "0"),

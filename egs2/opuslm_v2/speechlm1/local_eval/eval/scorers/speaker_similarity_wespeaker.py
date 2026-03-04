@@ -5,6 +5,7 @@ from typing import Any
 import torch
 import torchaudio
 from tqdm import tqdm
+from torch.nn import functional as F
 
 from .base import safe_mean, BaseScorer
 
@@ -20,7 +21,7 @@ class SpeakerSimilarityWespeakerScorer(BaseScorer):
         name: str,
         model_id: str = "english",
         device: str = "cpu",
-        batch_size: int = 32,
+        batch_size: int = 1,
         **kwargs: Any,
     ) -> None:
         super().__init__(name=name, **kwargs)
@@ -40,12 +41,16 @@ class SpeakerSimilarityWespeakerScorer(BaseScorer):
 
     def _load_feat(self, wav_path: str) -> torch.Tensor:
         """Load audio, resample to model rate, compute fbank features -> (T, F)."""
-        pcm, sr = torchaudio.load(wav_path)
-        pcm = pcm.to(torch.float)
-        if sr != self.we.resample_rate:
-            pcm = torchaudio.functional.resample(pcm, sr, self.we.resample_rate)
-        feats = self.we.compute_features(pcm, sample_rate=self.we.resample_rate, cmn=True)
-        return feats.squeeze(0)  # (T, F)
+        try:
+            pcm, sr = torchaudio.load(wav_path)
+            pcm = pcm.to(torch.float)
+            assert pcm.shape[-1] / sr > 0.5, "audio too short for embedding"
+            if sr != self.we.resample_rate:
+                pcm = torchaudio.functional.resample(pcm, sr, self.we.resample_rate)
+            feats = self.we.compute_features(pcm, sample_rate=self.we.resample_rate, cmn=True)
+            return feats.squeeze(0)  # (T, F)
+        except:
+            return None
 
     # ------------------------------------------------------------------
     # Batch embedding extraction
@@ -62,24 +67,17 @@ class SpeakerSimilarityWespeakerScorer(BaseScorer):
         path_list = list(feats_map)
         embeddings: dict[str, torch.Tensor] = {}
 
-        for i in tqdm(
-            range(0, len(path_list), self.batch_size),
-            desc=f"{self.name} [embed]",
-            leave=False,
-        ):
-            batch_paths = path_list[i : i + self.batch_size]
-            batch_feats = [feats_map[p] for p in batch_paths]
-
-            # Pad along T to max length in batch
-            max_t = max(f.shape[0] for f in batch_feats)
-            padded = torch.zeros(len(batch_feats), max_t, batch_feats[0].shape[1])
-            for j, f in enumerate(batch_feats):
-                padded[j, : f.shape[0]] = f
-
-            outputs = self.we.model(padded.to(self.device))
-            outputs = outputs[-1] if isinstance(outputs, tuple) else outputs
-            for path, emb in zip(batch_paths, outputs.detach().cpu().unbind(0)):
-                embeddings[path] = emb
+        for path in tqdm(path_list, desc=f"{self.name} [paths]", leave=False):
+            try:
+                feat = self._load_feat(path)
+                outputs = self.we.model(feat.unsqueeze(0).to(self.device))  # (1, D) or tuple
+                outputs = outputs[-1] if isinstance(outputs, tuple) else outputs
+                outputs = outputs.detach().cpu()
+                embed = outputs.squeeze(0)
+            except Exception as exc:
+                print(f"Failed to extract embedding for {path}: {exc}")
+                embed = None
+            embeddings[path] = embed
 
         return embeddings
 
@@ -89,8 +87,7 @@ class SpeakerSimilarityWespeakerScorer(BaseScorer):
 
     @staticmethod
     def _cosine(a: torch.Tensor, b: torch.Tensor) -> float:
-        cosine_score = torch.dot(a, b) / (torch.norm(a) * torch.norm(b))
-        return cosine_score.item()
+        return F.cosine_similarity(a, b).item()
 
     def run(self, samples: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         # Fail fast: KeyError if a sample is missing the required field
@@ -110,7 +107,11 @@ class SpeakerSimilarityWespeakerScorer(BaseScorer):
             sample_id = str(sample["sample_id"])
             try:
                 assert sample["eval_audio_path"] is not None, "missing eval_audio_path"
-                sim = self._cosine(embeddings[sample["audio_path"]], embeddings[sample["eval_audio_path"]])
+                try:
+                    sim = self._cosine(embeddings[sample["audio_path"]], embeddings[sample["eval_audio_path"]])
+                except:
+                    sim = -1.0  # treat missing embedding as maximally dissimilar
+
                 cos_score = (sim + 1.0) / 2  # normalize: [-1, 1] => [0, 1]
 
                 sims.append(sim)

@@ -6,6 +6,7 @@ from typing import Any
 
 import torch
 import torchaudio
+from torch.nn import functional as F
 from tqdm import tqdm
 
 from .base import safe_mean, BaseScorer
@@ -66,42 +67,20 @@ class SpeakerSimilarityWavlmScorer(BaseScorer):
     # ------------------------------------------------------------------
 
     @torch.no_grad()
-    def _extract_embeddings(self, paths: list[str]) -> dict[str, torch.Tensor]:
-        """Extract one embedding per unique path using padded batch inference."""
+    def _extract_embeddings(self, paths: list[str]) -> dict[str, torch.Tensor | None]:
+        """Extract one embedding per unique path. Returns None for failures."""
         unique_paths = list(dict.fromkeys(paths))  # preserve order, deduplicate
 
-        # Pre-load all waveforms (CPU)
-        wavs: list[torch.Tensor] = [
-            self._load_wav(p).squeeze(0)  # (T,)
-            for p in tqdm(unique_paths, desc=f"{self.name} [load]", leave=False)
-        ]
+        embeddings: dict[str, torch.Tensor | None] = {}
 
-        embeddings: dict[str, torch.Tensor] = {}
-
-        for i in tqdm(
-            range(0, len(unique_paths), self.batch_size),
-            desc=f"{self.name} [embed]",
-            leave=False,
-        ):
-            batch_paths = unique_paths[i : i + self.batch_size]
-            batch_wavs = wavs[i : i + self.batch_size]
-
-            # # Pad all waveforms to the longest one in the batch
-            # max_len = max(w.shape[0] for w in batch_wavs)
-            # padded = torch.zeros(len(batch_wavs), max_len)
-            # # padding_mask = torch.zeros(len(batch_wavs), max_len, dtype=torch.bool)
-            # for j, w in enumerate(batch_wavs):
-            #     padded[j, : w.shape[0]] = w
-            #     # padding_mask[j, w.shape[0] :] = True
-
-            # padded = padded.to(self.device)  # (B, T)
-            # embs = self.model(padded) # , padding_mask=padding_mask)         # (B, emb_dim)
-
-            # there is no mask support, so we can not use batch-decode
-            for path, wav in zip(batch_paths, batch_wavs):
-                wav = wav.unsqueeze(0)  # (1, T)
+        for path in tqdm(unique_paths, desc=f"{self.name} [embed]", leave=False):
+            try:
+                wav = self._load_wav(path)          # (1, T)
                 emb = self.model(wav.to(self.device))  # (1, emb_dim)
-                embeddings[path] = emb.squeeze(0)  # (emb_dim,)
+                embeddings[path] = emb.squeeze(0).detach().cpu()  # (emb_dim,)
+            except Exception as exc:
+                print(f"Failed to extract embedding for {path}: {exc}")
+                embeddings[path] = None
 
         return embeddings
 
@@ -111,7 +90,7 @@ class SpeakerSimilarityWavlmScorer(BaseScorer):
 
     @staticmethod
     def _cosine(a: torch.Tensor, b: torch.Tensor) -> float:
-        return (torch.dot(a, b) / (torch.norm(a) * torch.norm(b))).item()
+        return F.cosine_similarity(a, b).item()
 
     def run(self, samples: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         unique_paths: list[str] = []
@@ -132,10 +111,14 @@ class SpeakerSimilarityWavlmScorer(BaseScorer):
             sample_id = str(sample["sample_id"])
             try:
                 assert sample["eval_audio_path"] is not None, "missing eval_audio_path"
-                sim = self._cosine(
-                    embeddings[sample["audio_path"]],
-                    embeddings[sample["eval_audio_path"]],
-                )
+                try:
+                    sim = self._cosine(
+                        embeddings[sample["audio_path"]],
+                        embeddings[sample["eval_audio_path"]],
+                    )
+                except:
+                    sim = -1.0  # treat missing embedding as maximally dissimilar
+
                 cos_score = (sim + 1.0) / 2  # [-1, 1] -> [0, 1]
 
                 sims.append(sim)

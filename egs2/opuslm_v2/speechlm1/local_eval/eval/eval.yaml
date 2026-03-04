@@ -1,11 +1,35 @@
 runtime:
   num_workers: 8
 
+# ---------------------------------------------------------------------------
+# Shared LLM judge system prompt (anchor used by all tasks below)
+# ---------------------------------------------------------------------------
+_llm_judge_system_prompt: &llm_judge_sys |-
+  You are an expert speech audio evaluator.
+  You will receive two audio clips:
+    - **Audio A** = the ORIGINAL audio (before editing)
+    - **Audio B** = the EDITED audio (after editing)
+  Compare them carefully and assess the edit precisely and objectively
+  on multiple quality aspects.
+
+  Scoring rubric for EACH aspect (integer 1–5):
+    5 = Excellent — flawless, no issues at all
+    4 = Good — minor imperfections, largely successful
+    3 = Fair — noticeable issues but partially correct
+    2 = Poor — significant problems, barely acceptable
+    1 = Very Poor — complete failure on this aspect
+
+  Be strict, consistent, and unbiased.
+  Output ONLY valid JSON with the keys specified in the user message.
+
+# ============================================================================
+# Scorer definitions
+# ============================================================================
 scorers:
   asr_wer:
     resume: false
     model_name: openai/whisper-large-v3
-    batch_size: 32
+    batch_size: 24
     language: en
 
   speaker_similarity_wespeaker:
@@ -16,29 +40,55 @@ scorers:
     model_name: "wavlm_large"
     checkpoint: ./downloads/wavlm_large_finetune.pth
     device: "cuda"
-    batch_size: 1 # have to be one, see the source code fore more
+    batch_size: 1
 
   llm_judge_gemini:
+    # resume: false
     batch_size: 512
-    max_samples: 15
+    max_samples: 1
     model_kwargs:
-      model: "gemini-2.5-flash-preview"
+      model: "gemini-3-flash-preview"
+
+  llm_judge_openai:
+    # resume: false
+    model:
+      base_url: "http://cnode1-006:8000/v1"
+      model: "Qwen/Qwen3-Omni-30B-A3B-Thinking"
+    batch_size: 256
+    max_samples: 10000
+    # default_kwargs:
+    #   temperature: 0.1
+    #   max_tokens: 1024
 
   llm_judge_caption_llm:
-    batch_size: 512
+    resume: false
+    batch_size: 256
     captioner:
-      base_url: "http://cnode1-002:8000/v1,http://cnode1-002:8001/v1,http://cnode1-002:8002/v1,http://cnode1-002:8003/v1,http://cnode1-002:8004/v1,http://cnode1-002:8005/v1,http://cnode1-002:8006/v1,http://cnode1-002:8007/v1"
+      base_url: "http://cnode1-004:8000/v1,http://cnode1-004:8001/v1,http://cnode1-004:8003/v1,http://cnode1-004:8004/v1,http://cnode1-004:8005/v1,http://cnode1-004:8006/v1,http://cnode1-004:8007/v1"
       model: "Qwen/Qwen3-Omni-30B-A3B-Captioner"
-      # decode_kwargs:
-      #   temperature: 0.65
-      #   max_tokens: 1024
-
     judge_model:
-      base_url: "http://cnode1-001:8000/v1"
+      base_url: "http://cnode1-002:8000/v1"
       model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
       default_kwargs:
         temperature: 0.2
-        max_tokens: 1024
+        max_tokens: 2048
+    # embedding_model — required when a task sets `mode: embedding`.
+    # Provide base_url + model that serve /v1/embeddings.
+    embedding_model:
+      base_url:  "http://cnode1-010:8000/v1"
+      model: "Qwen/Qwen3-Embedding-4B"
+
+  audio_event_flam:
+    model_name: "v1-base"
+    ckpt_path: "/tmp/openflam"
+    device: "cuda"
+    vllm_client:
+      base_url: "http://cnode1-002:8000/v1"
+      model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+
+  fad:
+    embedding: "encodec-24k"
+    device: "cuda"
 
   speed_duration:
     relative_tolerance: 0.15
@@ -68,17 +118,545 @@ scorers:
     normalize_aggregate: true
     allow_download: false
 
-  # emotion_modelscope:
+  emotion_modelscope:
     model: "iic/emotion2vec_plus_large"
     gen_kwargs:
       batch_size: 32
 
+  clap_similarity:
+    enable_fusion: false
+    device: cuda
+    vllm_client:
+      base_url: "http://cnode1-002:8000/v1"
+      model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+
+# =============================================================================
+# Shared Scorer Configurations — YAML Anchors
+# =============================================================================
+# NOTE: The `_anchors` key is ignored by the eval runner; it only serves as a
+#       home for YAML anchors that are referenced in the `tasks` section below.
+audio_edit_anchors:
+  # =============================================================================
+  # eval_nonspeech.yaml
+  # Evaluation config for non-speech audio edit tasks:
+  #   ADD / REMOVE / REPLACE  (gen.yaml data)
+  #   CREATIVE EDIT            (gen_v3.yaml data)
+  #
+  # Four scorer backends:
+  #   1. llm_judge_openai      — Qwen3-Omni via vLLM  (direct audio → judge)
+  #   2. llm_judge_caption_llm — Captioner + text-LLM judge pipeline
+  #   3. llm_judge_gemini      — Gemini multimodal     (direct audio → judge)
+  #   4. fad                   — Fréchet Audio Distance (corpus-level)
+  #
+  # Evaluation Dimensions (for LLM judges):
+  #   edit_fidelity  (1-5) — Was the edit correctly applied?
+  #   audio_quality  (1-5) — Production quality, artifacts, distortion
+  #   coherence      (1-5) — Scene coherence, naturalness of blend
+  #   preservation   (1-5) — Are non-edited elements intact?
+  #   score          (1-5) — Overall quality
+  # =============================================================================
+
+  # ===========================================================================
+  #  ADD OPERATION
+  # ===========================================================================
+  add_scorers: &add_scorers
+    # --- OpenFLAM audio-event detector ---
+    - name: clap_similarity
+    - name: fad
+    # - name: audio_event_flam
+
+    # --- Qwen3-Omni (audio → direct judge) ---
+    - name: llm_judge_openai
+      score_key: score
+      score_keys: [score, edit_fidelity, audio_quality, coherence, preservation]
+      audio_keys: [eval_audio_path]
+      system_prompt: |-
+        You are an expert audio evaluator. You will listen to a GENERATED audio
+        that was created by ADDING a new sound element onto an original audio
+        track. Both the original content and the added element should coexist
+        simultaneously in the result.
+
+        Evaluate the following dimensions:
+        1. edit_fidelity (1-5): Is the added element clearly audible in the
+           audio? 5 = fully present and prominent, 1 = completely absent.
+        2. audio_quality (1-5): Production quality — clarity, absence of
+           artifacts, distortion, or clipping.
+        3. coherence (1-5): Do the combined layers blend into a natural,
+           unified audio scene? (1 = jarring / artificial, 5 = seamless)
+        4. preservation (1-5): Are the original audio characteristics preserved
+           without degradation?
+        5. score (1-5): Holistic overall assessment.
+
+        Output ONLY valid JSON:
+        {"edit_fidelity": <1-5>, "audio_quality": <1-5>, "coherence": <1-5>, "preservation": <1-5>, "score": <1-5>, "reason": "<≤60 words>"}
+      user_prompt: |-
+        ## Edit Instruction
+        {{ edit_prompt }}
+
+        ## Original Audio Description (before the edit)
+        {{ audio_caption }}
+
+        ## Description of the Element Being Added
+        {{ add_audio_caption }}
+
+        Listen to the audio and evaluate how well the ADD operation was performed.
+
+    # # --- Captioner + LLM Judge ---
+    # - name: llm_judge_caption_llm
+    #   score_key: score
+    #   score_keys: [score, edit_fidelity, audio_quality, coherence, preservation]
+    #   system_prompt: |-
+    #     You are an expert audio edit evaluator. You will compare an automatic
+    #     caption of the generated audio against the expected description to
+    #     evaluate an ADD operation (layering a new element onto original audio).
+
+    #     Evaluate:
+    #     1. edit_fidelity (1-5): Does the caption indicate the added element
+    #        is present? 5 = fully present, 1 = completely absent.
+    #     2. audio_quality (1-5): Based on the caption, does the audio seem
+    #        well-produced without artifacts?
+    #     3. coherence (1-5): Does the caption describe a coherent, unified
+    #        audio scene?
+    #     4. preservation (1-5): Does the caption indicate original elements are
+    #        preserved?
+    #     5. score (1-5): Overall quality.
+
+    #     Output ONLY valid JSON:
+    #     {"edit_fidelity": <1-5>, "audio_quality": <1-5>, "coherence": <1-5>, "preservation": <1-5>, "score": <1-5>, "reason": "<≤60 words>"}
+    #   user_prompt: |-
+    #     ## Edit Instruction
+    #     {{ edit_prompt }}
+
+    #     ## Original Audio Description
+    #     {{ audio_caption }}
+
+    #     ## Element That Was Added
+    #     {{ add_audio_caption }}
+
+    #     ## Generated Audio Caption (automatic captioner output)
+    #     {{ target_caption_gen_now }}
+
+    #     ## Expected Audio Description (reference)
+    #     {{ target_audio_caption }}
+
+    #     Evaluate whether the ADD edit was successfully applied.
+
+    # --- Gemini (audio → direct judge) ---
+    - name: llm_judge_gemini
+      score_key: score
+      score_keys: [score, generation_quality, main_consistency, operation_effect]
+      audio_keys: [audio_path, eval_audio_path]
+      user_prompt: |-
+        You are an expert audio evaluator. You will listen to two audio clips:
+          - **Audio A** = the ORIGINAL audio (before editing)
+          - **Audio B** = the EDITED audio (after editing)
+
+        An ADD operation was performed: a new sound element was layered onto
+        the original audio track.
+
+        ## Edit Instruction
+        {{ edit_prompt }}
+
+        ## Main Audio Content (should be preserved)
+        {{ audio_caption }}
+        {% if metadata is defined and metadata.main is defined and metadata.main.human_labels is defined %}Event labels: {{ metadata.main.human_labels | join(", ") }}{% endif %}
+
+        ## Element That Was Added
+        {{ add_audio_caption | default('') }}
+        {% if metadata is defined and metadata.y is defined and metadata.y.human_labels is defined %}Event labels: {{ metadata.y.human_labels | join(", ") }}{% endif %}
+
+        Evaluate carefully on these dimensions:
+
+        1. **generation_quality** (1-5): Overall production quality of Audio B.
+           Assess clarity, naturalness, absence of artifacts/distortion/clipping.
+           5 = studio quality, 1 = heavily distorted or unintelligible.
+
+        2. **main_consistency** (1-5): Is the main audio content described above
+           preserved consistently between Audio A and Audio B?
+           5 = perfectly preserved, 1 = main content completely altered or missing.
+
+        3. **operation_effect** (1-5): Was the ADD operation successfully executed?
+           Is the added element clearly audible in Audio B while blending naturally?
+           5 = element fully present and well-blended, 1 = completely absent.
+
+        4. **score** (1-5): Holistic overall assessment.
+
+        Output ONLY valid JSON:
+        {"generation_quality": <1-5>, "main_consistency": <1-5>, "operation_effect": <1-5>, "score": <1-5>, "reason": "<≤60 words>"}
+
+
+  # ===========================================================================
+  #  REMOVE OPERATION
+  # ===========================================================================
+  remove_scorers: &remove_scorers
+    # --- OpenFLAM audio-event detector ---
+    - name: clap_similarity
+    - name: fad
+    # - name: audio_event_flam
+
+    # --- Qwen3-Omni ---
+    - name: llm_judge_openai
+      score_key: score
+      score_keys: [score, edit_fidelity, audio_quality, coherence, preservation]
+      audio_keys: [eval_audio_path]
+      system_prompt: |-
+        You are an expert audio evaluator. You will listen to a GENERATED audio
+        from which a specific sound element should have been REMOVED. The
+        removed element should be completely absent, while all other content
+        should remain intact.
+
+        Evaluate the following dimensions:
+        1. edit_fidelity (1-5): Is the element that should be removed
+           actually absent from the audio? 5 = completely removed,
+           1 = still fully audible.
+        2. audio_quality (1-5): Production quality — check for removal
+           artifacts such as spectral holes, phase issues, clicks, or unnatural
+           silences.
+        3. coherence (1-5): Does the remaining audio sound complete and
+           natural, not hollow, broken, or missing content?
+        4. preservation (1-5): Are elements that should remain preserved
+           intact, without collateral damage from the removal process?
+        5. score (1-5): Holistic overall assessment.
+
+        Output ONLY valid JSON:
+        {"edit_fidelity": <1-5>, "audio_quality": <1-5>, "coherence": <1-5>, "preservation": <1-5>, "score": <1-5>, "reason": "<≤60 words>"}
+      user_prompt: |-
+        ## Edit Instruction
+        {{ edit_prompt }}
+
+        ## Original Audio Description (before removal — contains the element)
+        {{ audio_caption }}
+
+        ## Element That Should Be Removed
+        {{ remove_audio_caption }}
+
+        Listen to the audio and evaluate how well the REMOVE operation was performed.
+
+    # # --- Captioner + LLM Judge ---
+    # - name: llm_judge_caption_llm
+    #   score_key: score
+    #   score_keys: [score, edit_fidelity, audio_quality, coherence, preservation]
+    #   system_prompt: |-
+    #     You are an expert audio edit evaluator. You will compare an automatic
+    #     caption of the generated audio against the expected description to
+    #     evaluate a REMOVE operation (removing a specific element from audio).
+
+    #     Evaluate:
+    #     1. edit_fidelity (1-5): Does the generated caption indicate the
+    #        element is gone? 5 = fully removed, 1 = still present.
+    #     2. audio_quality (1-5): Does the caption suggest clean removal without
+    #        artifacts?
+    #     3. coherence (1-5): Does the remaining audio description sound
+    #        complete and natural?
+    #     4. preservation (1-5): Are non-removed elements described as intact?
+    #     5. score (1-5): Overall quality.
+
+    #     Output ONLY valid JSON:
+    #     {"edit_fidelity": <1-5>, "audio_quality": <1-5>, "coherence": <1-5>, "preservation": <1-5>, "score": <1-5>, "reason": "<≤60 words>"}
+    #   user_prompt: |-
+    #     ## Edit Instruction
+    #     {{ edit_prompt }}
+
+    #     ## Original Audio Description (before removal)
+    #     {{ audio_caption }}
+
+    #     ## Element That Should Be Removed
+    #     {{ remove_audio_caption }}
+
+    #     ## Generated Audio Caption (automatic captioner output)
+    #     {{ target_caption_gen_now }}
+
+    #     ## Expected Audio Description (after removal — reference)
+    #     {{ target_audio_caption }}
+
+    #     Evaluate whether the REMOVE edit was successfully applied.
+
+    # --- Gemini ---
+    - name: llm_judge_gemini
+      score_key: score
+      score_keys: [score, generation_quality, main_consistency, operation_effect]
+      audio_keys: [audio_path, eval_audio_path]
+      user_prompt: |-
+        You are an expert audio evaluator. You will listen to two audio clips:
+          - **Audio A** = the ORIGINAL audio (before editing)
+          - **Audio B** = the EDITED audio (after editing)
+
+        A REMOVE operation was performed: a specific sound element was removed
+        from the original audio track.
+
+        ## Edit Instruction
+        {{ edit_prompt }}
+
+        ## Main Audio Content (should be preserved in Audio B)
+        {% if metadata is defined and metadata.main is defined and metadata.main.audio_caption is defined %}{{ metadata.main.audio_caption }}{% else %}{{ audio_caption }}{% endif %}
+        {% if metadata is defined and metadata.main is defined and metadata.main.human_labels is defined %}Event labels: {{ metadata.main.human_labels | join(", ") }}{% endif %}
+
+        ## Element That Should Have Been Removed
+        {{ remove_audio_caption | default('') }}
+        {% if metadata is defined and metadata.x is defined and metadata.x.human_labels is defined %}Event labels: {{ metadata.x.human_labels | join(", ") }}{% endif %}
+
+        Evaluate carefully on these dimensions:
+
+        1. **generation_quality** (1-5): Overall production quality of Audio B.
+           Assess clarity, naturalness, absence of artifacts/distortion.
+           5 = clean and natural, 1 = heavy artifacts or degradation.
+
+        2. **main_consistency** (1-5): Is the main audio content described above
+           preserved consistently between Audio A and Audio B (excluding the
+           removed element)?
+           5 = perfectly preserved, 1 = main content altered or missing.
+
+        3. **operation_effect** (1-5): Was the REMOVE operation successfully
+           executed? Is the target element completely absent from Audio B?
+           5 = fully removed, 1 = still fully present.
+
+        4. **score** (1-5): Holistic overall assessment.
+
+        Output ONLY valid JSON:
+        {"generation_quality": <1-5>, "main_consistency": <1-5>, "operation_effect": <1-5>, "score": <1-5>, "reason": "<≤60 words>"}
+
+
+  # ===========================================================================
+  #  REPLACE OPERATION
+  # ===========================================================================
+  replace_scorers: &replace_scorers
+    # --- OpenFLAM audio-event detector ---
+    - name: clap_similarity
+    - name: fad
+    # - name: audio_event_flam
+
+    # --- Qwen3-Omni ---
+    - name: llm_judge_openai
+      score_key: score
+      score_keys: [score, edit_fidelity, audio_quality, coherence, preservation]
+      audio_keys: [eval_audio_path]
+      system_prompt: |-
+        You are an expert audio evaluator. You will listen to a GENERATED audio
+        where one sound element was REPLACED with another. The old element
+        should be absent, the new element should be present, and all other
+        content should remain intact.
+
+        Evaluate the following dimensions:
+        1. edit_fidelity (1-5): Was the old element removed AND the new
+           element successfully added? 5 = swap fully successful,
+           1 = completely failed.
+        2. audio_quality (1-5): Production quality — clarity, absence of
+           artifacts, distortion, or crossfade issues.
+        3. coherence (1-5): Does the new combination of elements sound
+           natural and well-blended? Is the replacement seamlessly integrated?
+        4. preservation (1-5): Are unchanged elements (the persistent audio
+           content) preserved intact without collateral modification?
+        5. score (1-5): Holistic overall assessment.
+
+        Output ONLY valid JSON:
+        {"edit_fidelity": <1-5>, "audio_quality": <1-5>, "coherence": <1-5>, "preservation": <1-5>, "score": <1-5>, "reason": "<≤60 words>"}
+      user_prompt: |-
+        ## Edit Instruction
+        {{ edit_prompt }}
+
+        ## Original Audio Description (before replacement)
+        {{ audio_caption }}
+
+        ## Element That Was Removed (old)
+        {{ remove_audio_caption }}
+
+        ## Element That Was Added (new)
+        {{ add_audio_caption }}
+
+        Listen to the audio and evaluate how well the REPLACE operation was performed.
+
+    # # --- Captioner + LLM Judge ---
+    # - name: llm_judge_caption_llm
+    #   score_key: score
+    #   score_keys: [score, edit_fidelity, audio_quality, coherence, preservation]
+    #   system_prompt: |-
+    #     You are an expert audio edit evaluator. You will compare an automatic
+    #     caption of the generated audio against the expected description to
+    #     evaluate a REPLACE operation (swapping one sound element for another).
+
+    #     Evaluate:
+    #     1. edit_fidelity (1-5): Does the caption indicate the old element
+    #        is gone AND the new element is present?
+    #        5 = swap fully evident, 1 = completely failed.
+    #     2. audio_quality (1-5): Does the caption suggest good production
+    #        quality?
+    #     3. coherence (1-5): Does the described scene sound coherent with the
+    #        new element integrated?
+    #     4. preservation (1-5): Are unchanged elements described as intact?
+    #     5. score (1-5): Overall quality.
+
+    #     Output ONLY valid JSON:
+    #     {"edit_fidelity": <1-5>, "audio_quality": <1-5>, "coherence": <1-5>, "preservation": <1-5>, "score": <1-5>, "reason": "<≤60 words>"}
+    #   user_prompt: |-
+    #     ## Edit Instruction
+    #     {{ edit_prompt }}
+
+    #     ## Original Audio Description (before replacement)
+    #     {{ audio_caption }}
+
+    #     ## Element That Was Removed (old)
+    #     {{ remove_audio_caption }}
+
+    #     ## Element That Was Added (new)
+    #     {{ add_audio_caption }}
+
+    #     ## Generated Audio Caption (automatic captioner output)
+    #     {{ target_caption_gen_now }}
+
+    #     ## Expected Audio Description (after replacement — reference)
+    #     {{ target_audio_caption }}
+
+    #     Evaluate whether the REPLACE edit was successfully applied.
+
+    # --- Gemini ---
+    - name: llm_judge_gemini
+      score_key: score
+      score_keys: [score, generation_quality, main_consistency, operation_effect]
+      audio_keys: [audio_path, eval_audio_path]
+      user_prompt: |-
+        You are an expert audio evaluator. You will listen to two audio clips:
+          - **Audio A** = the ORIGINAL audio (before editing)
+          - **Audio B** = the EDITED audio (after editing)
+
+        A REPLACE operation was performed: one sound element was replaced with
+        another within the audio track.
+
+        ## Edit Instruction
+        {{ edit_prompt }}
+
+        ## Main Audio Content (should be preserved in Audio B)
+        {% if metadata is defined and metadata.main is defined and metadata.main.audio_caption is defined %}{{ metadata.main.audio_caption }}{% else %}{{ audio_caption }}{% endif %}
+        {% if metadata is defined and metadata.main is defined and metadata.main.human_labels is defined %}Event labels: {{ metadata.main.human_labels | join(", ") }}{% endif %}
+
+        ## Element That Was Removed (old)
+        {{ remove_audio_caption | default('') }}
+        {% if metadata is defined and metadata.x is defined and metadata.x.human_labels is defined %}Event labels: {{ metadata.x.human_labels | join(", ") }}{% endif %}
+
+        ## Element That Was Added (new)
+        {{ add_audio_caption | default('') }}
+        {% if metadata is defined and metadata.y is defined and metadata.y.human_labels is defined %}Event labels: {{ metadata.y.human_labels | join(", ") }}{% endif %}
+
+        Evaluate carefully on these dimensions:
+
+        1. **generation_quality** (1-5): Overall production quality of Audio B.
+           Assess clarity, naturalness, absence of artifacts/distortion.
+           5 = clean and natural, 1 = heavy artifacts or degradation.
+
+        2. **main_consistency** (1-5): Is the main audio content described above
+           preserved consistently between Audio A and Audio B?
+           5 = perfectly preserved, 1 = main content altered or missing.
+
+        3. **operation_effect** (1-5): Was the REPLACE operation successfully
+           executed? Is the old element absent AND the new element present?
+           5 = swap fully successful, 1 = completely failed.
+
+        4. **score** (1-5): Holistic overall assessment.
+
+        Output ONLY valid JSON:
+        {"generation_quality": <1-5>, "main_consistency": <1-5>, "operation_effect": <1-5>, "score": <1-5>, "reason": "<≤60 words>"}
+
+
+  # ===========================================================================
+  #  CREATIVE EDIT (gen_v3 style — freeform audio transformation)
+  # ===========================================================================
+  creative_scorers: &creative_scorers
+    # --- OpenFLAM audio-event detector ---
+    # NOTE: creative edits may not have structured metadata.x / metadata.y,
+    #       so audio_event_flam may produce errors for some samples — this is expected.
+    # - name: audio_event_flam
+    - name: fad
+
+    # --- Qwen3-Omni ---
+    - name: llm_judge_openai
+      score_key: score
+      score_keys: [score, edit_fidelity, audio_quality, creativity, coherence]
+      audio_keys: [eval_audio_path]
+      system_prompt: |-
+        You are an expert audio evaluator. You will listen to a GENERATED audio
+        that was created by applying a CREATIVE EDIT to an original audio based
+        on a natural-language instruction. The edit may transform the scene,
+        mood, genre, setting, or any other acoustic aspect.
+
+        Evaluate the following dimensions:
+        1. edit_fidelity (1-5): Does the audio reflect the requested
+           creative edit? 5 = transformation fully evident,
+           1 = no meaningful change or wrong transformation.
+        2. audio_quality (1-5): Production quality — clarity, naturalness,
+           absence of artifacts.
+        3. creativity (1-5): How interesting, vivid, and creative is the
+           result? Does it go beyond the obvious?
+        4. coherence (1-5): Does the resulting audio form a plausible,
+           self-consistent audio scene?
+        5. score (1-5): Holistic overall assessment.
+
+        Output ONLY valid JSON:
+        {"edit_fidelity": <1-5>, "audio_quality": <1-5>, "creativity": <1-5>, "coherence": <1-5>, "score": <1-5>, "reason": "<≤60 words>"}
+      user_prompt: |-
+        ## Edit Instruction
+        {{ edit_prompt }}
+
+        ## Original Audio Description (before the creative edit)
+        {{ source_caption }}
+
+        ## Expected Result Description
+        {{ target_caption }}
+
+        Listen to the audio and evaluate how well the creative edit was applied.
+
+    # --- Captioner + Embedding Similarity ---
+    # Flow: captioner generates a caption for eval_audio_path, then cosine
+    # similarity is computed between the generated caption embedding and the
+    # target_audio_caption embedding via /v1/embeddings.
+    - name: llm_judge_caption_llm
+      mode: embedding
+      ref_caption_key: target_audio_caption
+      score_keys: [score, caption_similarity]
+
+    # --- Gemini ---
+    - name: llm_judge_gemini
+      score_key: score
+      score_keys: [score, edit_fidelity, audio_quality, creativity, coherence]
+      audio_keys: [eval_audio_path]
+      user_prompt: |-
+        Listen to the audio carefully. This audio was created by applying a
+        CREATIVE EDIT — a freeform transformation based on a natural-language
+        instruction.
+
+        ## Edit Instruction
+        {{ edit_prompt }}
+
+        ## Original Audio Description
+        {{ source_caption }}
+
+        ## Expected Result Description
+        {{ target_caption }}
+
+        Evaluate:
+        1. edit_fidelity (1-5): Does the audio reflect the requested
+           creative transformation? 5 = fully evident, 1 = no change.
+        2. audio_quality (1-5): Production quality, naturalness, artifacts.
+        3. creativity (1-5): How interesting and vivid is the result?
+        4. coherence (1-5): Does the audio form a plausible, self-consistent
+           scene?
+        5. score (1-5): Overall quality.
+
+        Output ONLY valid JSON:
+        {"edit_fidelity": <1-5>, "audio_quality": <1-5>, "creativity": <1-5>, "coherence": <1-5>, "score": <1-5>, "reason": "<≤60 words>"}
+
+
+
+
+# ============================================================================
+# Tasks
+# ============================================================================
 tasks:
-  # transcription_*: only WER + SPK
+  # ------------------------------------------------------------------
+  # Transcription edits — objective metrics only (WER + SPK + MOS)
+  # ------------------------------------------------------------------
   transcription_ins:
     scorers:
       - name: asr_wer
-      - name: speaker_similarity_wespeaker
+      # - name: speaker_similarity_wespeaker
       - name: speaker_similarity_wavlm
       - name: pseudo_mos
         predictor_types: ["dnsmos", "utmos"]
@@ -86,205 +664,308 @@ tasks:
   transcription_del:
     scorers:
       - name: asr_wer
-      - name: speaker_similarity_wespeaker
+      # - name: speaker_similarity_wespeaker
       - name: speaker_similarity_wavlm
       - name: pseudo_mos
         predictor_types: ["dnsmos", "utmos"]
+
   transcription_sub:
     scorers:
       - name: asr_wer
-      - name: speaker_similarity_wespeaker
+      # - name: speaker_similarity_wespeaker
       - name: speaker_similarity_wavlm
       - name: pseudo_mos
         predictor_types: ["dnsmos", "utmos"]
+
   transcription_replace_sentence:
     scorers:
       - name: asr_wer
-      - name: speaker_similarity_wespeaker
+      # - name: speaker_similarity_wespeaker
       - name: speaker_similarity_wavlm
       - name: pseudo_mos
         predictor_types: ["dnsmos", "utmos"]
+
+  # ------------------------------------------------------------------
+  # transcription_add_paralinguistic
+  #   Aspects: paralinguistic_presence, position_accuracy,
+  #            content_preservation, naturalness
+  # ------------------------------------------------------------------
   transcription_add_paralinguistic:
     scorers:
-      # - name: asr_wer
-      - name: speaker_similarity_wespeaker
-      - name: llm_judge_caption_llm
-        score_key: score
-        system_prompt: |-
-          You are an expert evaluator.
-          Assess if the modified caption reflects added paralinguistic features at correct position.
-          
-          Output ONLY valid JSON: {"score": <0/1>, "reason": "..."}
-        user_prompt: |-          
-          ## Edit Prompt
-          {{ edit_prompt }}
+      # - name: speaker_similarity_wespeaker
 
-          ## Expected Text
-          {{ target_text }}
-          
-          ## Target Audio Caption
-          {{ target_caption_gen_now }}
+      - name: llm_judge_openai
+        audio_keys: [audio_path, eval_audio_path]
+        system_prompt: *llm_judge_sys
+        user_prompt: &add_para_user |-
+          The first audio is **Audio A** (original), the second is **Audio B** (edited).
 
-          Determine if the modified caption naturally and accurately indicates the presence of new paralinguistic features.
-
-      - name: llm_judge_gemini
-        score_key: score
-        audio_keys:
-          - eval_audio_path
-        user_prompt: |-
           ## Edit Instruction
           {{ edit_prompt }}
 
-          Listen to the audio carefully.
-          Evaluate whether the specified paralinguistic feature (e.g., laughter, cough, breath, filled pause) is present
-          at the correct position as described in the edit instruction, and that the surrounding speech content is preserved.
+          {% if target_text is defined and target_text %}
+          ## Expected Transcription
+          {{ target_text }}
+          {% endif %}
 
-          Output ONLY valid JSON: {"score": <0 or 1>, "reason": "..."}
+          Compare Audio A and Audio B, then evaluate the paralinguistic edit on these aspects:
+
+          1. **paralinguistic_presence** (1-5): Is the specified paralinguistic feature
+             (e.g., laughter, cough, breath, filler) clearly audible in Audio B?
+          2. **position_accuracy** (1-5): Does the paralinguistic event occur at the
+             correct position as described in the edit instruction?
+          3. **content_preservation** (1-5): Is the surrounding speech content (words,
+             meaning) from Audio A fully preserved in Audio B?
+          4. **naturalness** (1-5): Does the paralinguistic insertion in Audio B sound
+             natural and seamlessly blended with the speech?
+
+          Output ONLY valid JSON:
+          {"paralinguistic_presence": <1-5>, "position_accuracy": <1-5>, "content_preservation": <1-5>, "naturalness": <1-5>, "reason": "brief explanation"}
+
+      - name: llm_judge_gemini
+        audio_keys: [audio_path, eval_audio_path]
+        system_prompt: *llm_judge_sys
+        user_prompt: *add_para_user
+
       - name: pseudo_mos
         predictor_types: ["dnsmos", "utmos"]
+
+  # ------------------------------------------------------------------
+  # style_whisper
+  #   Aspects: style_conformity, content_preservation,
+  #            expressiveness, audio_quality
+  # ------------------------------------------------------------------
   style_whisper:
     scorers:
       - name: asr_wer
-      - name: speaker_similarity_wespeaker
-      - name: llm_judge_caption_llm
-        score_key: score
-        system_prompt: |-
-          You are an expert evaluator.
-          Assess if the modified caption reflects the new speaking style.
-          
-          Output ONLY valid JSON: {"score": <0/1>, "reason": "..."}
-        user_prompt: |-
+      - name: speaker_similarity_wavlm
+
+      - name: llm_judge_openai
+        audio_keys: [audio_path, eval_audio_path]
+        system_prompt: *llm_judge_sys
+        user_prompt: &style_whisper_user |-
+          The first audio is **Audio A** (original), the second is **Audio B** (edited).
+
           ## Edit Instruction
           {{ edit_prompt }}
 
-          ## Original Audio Caption
-          {{ audio_caption }}
-
-          ## Expected Audio Caption After Edit
+          {% if target_audio_caption is defined and target_audio_caption %}
+          ## Target Style Description
           {{ target_audio_caption }}
+          {% endif %}
 
-          Determine if the modified caption naturally and accurately reflects the target speaking style described in the edit instruction.
+          Compare Audio A and Audio B, then evaluate the speaking-style edit on these aspects:
 
-          Output ONLY valid JSON: {"score": <0 or 1>, "reason": "..."}
+          1. **style_conformity** (1-5): Does Audio B's speaking style accurately match
+             the target style described in the edit instruction (e.g., whispering,
+             fast/slow pace, pitch/tone change)?
+          2. **content_preservation** (1-5): Is the speech content (words, meaning) from
+             Audio A fully preserved in Audio B despite the style change?
+          3. **expressiveness** (1-5): Is the style change clearly perceived and
+             effectively conveyed when comparing Audio B to Audio A?
+          4. **audio_quality** (1-5): Is Audio B's overall audio quality maintained
+             without noticeable artifacts, distortion, or degradation?
+
+          Output ONLY valid JSON:
+          {"style_conformity": <1-5>, "content_preservation": <1-5>, "expressiveness": <1-5>, "audio_quality": <1-5>, "reason": "brief explanation"}
+
       - name: llm_judge_gemini
-        score_key: score
-        audio_keys:
-          - eval_audio_path
-        user_prompt: |-
-          ## Edit Instruction
-          {{ edit_prompt }}
+        audio_keys: [audio_path, eval_audio_path]
+        system_prompt: *llm_judge_sys
+        user_prompt: *style_whisper_user
 
-          Listen to the audio carefully.
-          Evaluate whether the speaking style (e.g., whispering, pacing, pitch, tone) matches the target style
-          described in the edit instruction, while the speech content remains intact.
-
-          Output ONLY valid JSON: {"score": <0 or 1>, "reason": "..."}
       - name: pseudo_mos
         predictor_types: ["dnsmos", "utmos"]
+
+  # ------------------------------------------------------------------
+  # style_emotion
+  #   Aspects: emotion_conformity, content_preservation,
+  #            expressiveness, audio_quality
+  # ------------------------------------------------------------------
   style_emotion:
     scorers:
       - name: asr_wer
+      - name: speaker_similarity_wavlm
       - name: emotion_modelscope
-      - name: llm_judge_caption_llm
-        score_key: score
-        system_prompt: |-
-          You are an expert evaluator.
-          Assess if the modified caption reflects a change in emotion as described in the edit instruction.
-          
-          Output ONLY valid JSON: {"score": <0/1>, "reason": "..."}
-        user_prompt: |-
+
+      - name: llm_judge_openai
+        audio_keys: [audio_path, eval_audio_path]
+        system_prompt: *llm_judge_sys
+        user_prompt: &style_emotion_user |-
+          The first audio is **Audio A** (original), the second is **Audio B** (edited).
+
           ## Edit Instruction
           {{ edit_prompt }}
 
-          ## Original Audio Caption
-          {{ audio_caption }}
-
-          ## Expected Audio Caption After Edit
+          {% if target_audio_caption is defined and target_audio_caption %}
+          ## Target Emotion Description
           {{ target_audio_caption }}
+          {% endif %}
 
-          Determine if the modified caption naturally and accurately reflects the target emotion described in the edit instruction.
+          Compare Audio A and Audio B, then evaluate the emotion edit on these aspects:
 
-          Output ONLY valid JSON: {"score": <0 or 1>, "reason": "..."}
+          1. **emotion_conformity** (1-5): Does Audio B's emotional expression clearly
+             and accurately match the target emotion (e.g., happy, sad, angry, surprised)?
+          2. **content_preservation** (1-5): Is the speech content (words, meaning) from
+             Audio A fully preserved in Audio B despite the emotion change?
+          3. **expressiveness** (1-5): Is the emotion in Audio B convincingly and clearly
+             conveyed, sounding genuine rather than forced or robotic?
+          4. **audio_quality** (1-5): Is Audio B's overall audio quality maintained
+             without noticeable artifacts, distortion, or degradation?
+
+          Output ONLY valid JSON:
+          {"emotion_conformity": <1-5>, "content_preservation": <1-5>, "expressiveness": <1-5>, "audio_quality": <1-5>, "reason": "brief explanation"}
 
       - name: llm_judge_gemini
-        score_key: score
-        audio_keys:
-          - eval_audio_path
-        user_prompt: |-
-          ## Edit Instruction
-          {{ edit_prompt }}
+        audio_keys: [audio_path, eval_audio_path]
+        system_prompt: *llm_judge_sys
+        user_prompt: *style_emotion_user
 
-          Listen to the audio carefully.
-          Evaluate whether the speaker's emotional expression (e.g., happy, sad, angry, surprised) matches
-          the target emotion described in the edit instruction, while the speech content remains intact.
-
-          Output ONLY valid JSON: {"score": <0 or 1>, "reason": "..."}
       - name: pseudo_mos
         predictor_types: ["dnsmos", "utmos"]
+
+  # ------------------------------------------------------------------
+  # Audio effect — speed  (objective metrics only)
+  # ------------------------------------------------------------------
   audio_effect_speed:
     scorers:
       - name: speed_duration
       - name: asr_wer
-      - name: speaker_similarity_wespeaker
+      - name: speaker_similarity_wavlm
       - name: pseudo_mos
         predictor_types: ["dnsmos", "utmos"]
+
+  # ------------------------------------------------------------------
+  # Audio effect — volume  (objective metrics only)
+  # ------------------------------------------------------------------
   audio_effect_volume:
     scorers:
       - name: volume_loudness
       - name: asr_wer
-      - name: speaker_similarity_wespeaker
-      - name: pseudo_mos
-        predictor_types: ["dnsmos", "utmos"]
-  audio_effect_pitch:
-    scorers:
-      - name: pitch_shift
-      - name: asr_wer
-      - name: pseudo_mos
-        predictor_types: ["dnsmos", "utmos"]
-  audio_effect_reverb:
-    scorers:
-      - name: llm_judge_caption_llm
-        score_key: score
-        system_prompt: |-
-          You are an expert evaluator.
-          Assess if the modified caption reflects added reverberation as described in the edit instruction.
-
-          Output ONLY valid JSON: {"score": <0/1>, "reason": "..."}
-        user_prompt: |-
-          ## Edit Instruction
-          {{ edit_prompt }}
-
-          ## Original Audio Caption
-          {{ audio_caption }}
-
-          ## Expected Audio Caption After Edit
-          {{ target_audio_caption }}
-
-          Determine if the modified caption naturally and accurately indicates added reverberation (e.g., room or hall echo) as described in the edit instruction.
-
-          Output ONLY valid JSON: {"score": <0 or 1>, "reason": "..."}
-
-      - name: llm_judge_gemini
-        score_key: score
-        audio_keys:
-          - eval_audio_path
-        user_prompt: |-
-          ## Edit Instruction
-          {{ edit_prompt }}
-
-          Listen to the audio carefully.
-          Evaluate whether the audio sounds reverberant (e.g., as if recorded in a room or hall with echo)
-          as described in the edit instruction, while remaining natural and intelligible.
-
-          Output ONLY valid JSON: {"score": <0 or 1>, "reason": "..."}
-      - name: pseudo_mos
-        predictor_types: ["dnsmos", "utmos"]
-  audio_effect_dereverb:
-    scorers:
-      - name: asr_wer
-      - name: speaker_similarity_wespeaker
       - name: speaker_similarity_wavlm
       - name: pseudo_mos
         predictor_types: ["dnsmos", "utmos"]
+
+  # ------------------------------------------------------------------
+  # Audio effect — pitch  (objective metrics only)
+  # ------------------------------------------------------------------
+  audio_effect_pitch:
+    scorers:
+      - name: pitch_shift
+      - name: speaker_similarity_wavlm
+      - name: asr_wer
       - name: pseudo_mos
         predictor_types: ["dnsmos", "utmos"]
+
+  # ------------------------------------------------------------------
+  # audio_effect_reverb
+  #   Aspects: effect_presence, intelligibility,
+  #            naturalness, audio_quality
+  # ------------------------------------------------------------------
+  audio_effect_reverb:
+    scorers:
+      - name: llm_judge_openai
+        audio_keys: [audio_path, eval_audio_path]
+        system_prompt: *llm_judge_sys
+        user_prompt: &reverb_user |-
+          The first audio is **Audio A** (original, no reverb), the second is **Audio B** (edited).
+
+          ## Edit Instruction
+          {{ edit_prompt }}
+
+          Compare Audio A and Audio B, then evaluate the reverb effect on these aspects:
+
+          1. **effect_presence** (1-5): Is the reverberation / echo effect clearly and
+             appropriately present in Audio B compared to the dry Audio A?
+          2. **intelligibility** (1-5): Despite the reverb in Audio B, is the speech
+             content still clearly intelligible and understandable?
+          3. **naturalness** (1-5): Does Audio B's reverb sound like a natural acoustic
+             environment (e.g., room, hall) rather than artificial processing?
+          4. **audio_quality** (1-5): Is Audio B's overall audio quality maintained
+             without excessive distortion, clipping, or unwanted noise compared to Audio A?
+
+          Output ONLY valid JSON:
+          {"effect_presence": <1-5>, "intelligibility": <1-5>, "naturalness": <1-5>, "audio_quality": <1-5>, "reason": "brief explanation"}
+
+      - name: llm_judge_gemini
+        audio_keys: [audio_path, eval_audio_path]
+        system_prompt: *llm_judge_sys
+        user_prompt: *reverb_user
+
+      - name: pseudo_mos
+        predictor_types: ["dnsmos", "utmos"]
+
+  # ------------------------------------------------------------------
+  # Audio effect — dereverb  (objective metrics only)
+  # ------------------------------------------------------------------
+  audio_effect_dereverb:
+    scorers:
+      - name: asr_wer
+      # - name: speaker_similarity_wespeaker
+      - name: speaker_similarity_wavlm
+      - name: pseudo_mos
+        predictor_types: ["dnsmos", "utmos"]
+
+
+  # ===========================
+  #  ADD tasks
+  # ===========================
+  music_add_music:    { scorers: *add_scorers }
+  music_add_sound:    { scorers: *add_scorers }
+  music_add_speech:   { scorers: *add_scorers }
+  sound_add_music:    { scorers: *add_scorers }
+  sound_add_sound:    { scorers: *add_scorers }
+  sound_add_speech:   { scorers: *add_scorers }
+  speech_add_music:   { scorers: *add_scorers }
+  speech_add_sound:   { scorers: *add_scorers }
+  speech_add_speech:  { scorers: *add_scorers }
+
+  # --- mix (mixed-element add) ---
+  music_add_mix:    { scorers: *add_scorers }
+  sound_add_mix:    { scorers: *add_scorers }
+  speech_add_mix:   { scorers: *add_scorers }
+
+  # ===========================
+  #  REMOVE tasks
+  # ===========================
+  music_remove_music:    { scorers: *remove_scorers }
+  music_remove_sound:    { scorers: *remove_scorers }
+  music_remove_speech:   { scorers: *remove_scorers }
+  sound_remove_music:    { scorers: *remove_scorers }
+  sound_remove_sound:    { scorers: *remove_scorers }
+  sound_remove_speech:   { scorers: *remove_scorers }
+  speech_remove_music:   { scorers: *remove_scorers }
+  speech_remove_sound:   { scorers: *remove_scorers }
+  speech_remove_speech:  { scorers: *remove_scorers }
+
+  # --- mix (mixed-element remove) ---
+  music_remove_mix:    { scorers: *remove_scorers }
+  sound_remove_mix:    { scorers: *remove_scorers }
+  speech_remove_mix:   { scorers: *remove_scorers }
+
+  # ===========================
+  #  REPLACE tasks
+  # ===========================
+  music_replace_music:    { scorers: *replace_scorers }
+  music_replace_sound:    { scorers: *replace_scorers }
+  music_replace_speech:   { scorers: *replace_scorers }
+  sound_replace_music:    { scorers: *replace_scorers }
+  sound_replace_sound:    { scorers: *replace_scorers }
+  sound_replace_speech:   { scorers: *replace_scorers }
+  speech_replace_music:   { scorers: *replace_scorers }
+  speech_replace_sound:   { scorers: *replace_scorers }
+  speech_replace_speech:  { scorers: *replace_scorers }
+
+  # --- mix (mixed-element replace) ---
+  music_replace_mix:    { scorers: *replace_scorers }
+  sound_replace_mix:    { scorers: *replace_scorers }
+  speech_replace_mix:   { scorers: *replace_scorers }
+
+  # ===========================
+  #  CREATIVE EDIT tasks (gen_v3 style)
+  #  — edit_type comes from the creative edit pool
+  # ===========================
+  music_creative_edit:       { scorers: *creative_scorers }
+  sing_creative_edit:       { scorers: *creative_scorers }
+  sound_creative_edit:       { scorers: *creative_scorers }
+  speech_creative_edit:       { scorers: *creative_scorers }

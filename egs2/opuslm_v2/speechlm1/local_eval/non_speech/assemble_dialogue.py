@@ -44,6 +44,7 @@ MODE_CHOICES = [
     "cat2main",  # Caption1+Caption2 -> Target Audio (as prefill)
     "t2a_t2a",     # Caption1 -> Source Audio (turn1) ; Caption2 -> Target Audio (turn2)
     "a2t_t2a",     # Source Audio -> Caption1 (turn1) ; Caption2 -> Target Audio (turn2)
+    "tgt2audio",   # Edit Prompt -> Target Audio (single-turn)
 ]
 
 # ---------------------------------------------------------------------------
@@ -88,6 +89,11 @@ def build_messages(record: dict, mode: str) -> list | None:
         messages = [
             ["user", "audio", source_audio_path],
             ["assistant", "text", source_audio_caption],
+            ["user", "text", target_audio_caption],
+        ]
+        last_audio = target_audio_path
+    elif mode == "tgt2audio":
+        messages = [
             ["user", "text", target_audio_caption],
         ]
         last_audio = target_audio_path

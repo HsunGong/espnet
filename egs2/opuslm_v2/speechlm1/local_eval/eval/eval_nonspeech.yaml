@@ -27,18 +27,18 @@ runtime:
 scorers:
   llm_judge_openai:
     model:
-      base_url: "http://cnode1-002:8000/v1,http://cnode1-002:8001/v1,http://cnode1-002:8002/v1,http://cnode1-002:8003/v1,http://cnode1-002:8004/v1,http://cnode1-002:8005/v1,http://cnode1-002:8006/v1,http://cnode1-002:8007/v1"
-      model: "Qwen/Qwen3-Omni-30B-A3B-Captioner"
+      base_url: "http://cnode1-010:9001/v1"
+      model: "Qwen/Qwen3-Omni-30B-A3B-Instruct"
     batch_size: 256
     max_samples: 10000
 
   llm_judge_caption_llm:
     batch_size: 256
     captioner:
-      base_url: "http://cnode1-002:8000/v1,http://cnode1-002:8001/v1,http://cnode1-002:8002/v1,http://cnode1-002:8003/v1,http://cnode1-002:8004/v1,http://cnode1-002:8005/v1,http://cnode1-002:8006/v1,http://cnode1-002:8007/v1"
+      base_url: "http://cnode1-010:9000/v1"
       model: "Qwen/Qwen3-Omni-30B-A3B-Captioner"
     judge_model:
-      base_url: "http://cnode1-004:8000/v1,http://cnode1-006:8000/v1"
+      base_url: "http://cnode1-010:9002/v1"
       model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
       default_kwargs:
         temperature: 0.2
@@ -51,7 +51,7 @@ scorers:
       model: "gemini-2.5-flash-preview"
 
   fad:
-    embedding: "encodec-emb"
+    embedding: "encodec-24k"
     device: "cuda"
 
 # =============================================================================
@@ -556,6 +556,11 @@ tasks:
   speech_add_sound:   { scorers: *add_scorers }
   speech_add_speech:  { scorers: *add_scorers }
 
+  # --- mix (mixed-element add) ---
+  music_add_mix:    { scorers: *add_scorers }
+  sound_add_mix:    { scorers: *add_scorers }
+  speech_add_mix:   { scorers: *add_scorers }
+
   # ===========================
   #  REMOVE tasks
   # ===========================
@@ -569,6 +574,11 @@ tasks:
   speech_remove_sound:   { scorers: *remove_scorers }
   speech_remove_speech:  { scorers: *remove_scorers }
 
+  # --- mix (mixed-element remove) ---
+  music_remove_mix:    { scorers: *remove_scorers }
+  sound_remove_mix:    { scorers: *remove_scorers }
+  speech_remove_mix:   { scorers: *remove_scorers }
+
   # ===========================
   #  REPLACE tasks
   # ===========================
@@ -581,6 +591,11 @@ tasks:
   speech_replace_music:   { scorers: *replace_scorers }
   speech_replace_sound:   { scorers: *replace_scorers }
   speech_replace_speech:  { scorers: *replace_scorers }
+
+  # --- mix (mixed-element replace) ---
+  music_replace_mix:    { scorers: *replace_scorers }
+  sound_replace_mix:    { scorers: *replace_scorers }
+  speech_replace_mix:   { scorers: *replace_scorers }
 
   # ===========================
   #  CREATIVE EDIT tasks (gen_v3 style)

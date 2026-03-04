@@ -69,7 +69,7 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
       --resume-path ${resume_path} \
       --save-loader-state \
       --wandb-mode online \
-      > ${exp_dir}/logs/train_node${node_rank}_${timestamp}.log 2>&1 
+      2>&1 | tee ${exp_dir}/logs/train_node${node_rank}_${timestamp}.log
 fi
 
 if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
