@@ -140,10 +140,15 @@ for dir in exp/*/inference/*; do python3 local_eval/convert_results.py --exp-inf
 
 
 
-python local_eval/eval_parallel.py --gpus 4,5,6,7 --max-workers-per-gpu 2 --config local_eval/eval/eval.yaml --metadata data/test_clean/speech_edit --data-dirs exp/*-1000k/inference/*/eval-test_clean-v1* exp/{minguniaudioedit,stepaudiox,cv3}/test_clean/speech_edit
+python local_eval/eval_parallel.py --gpus 1,2,3,4,5,6,7 --max-workers-per-gpu 8 --config local_eval/eval/eval.yaml --metadata data/test_clean/speech_edit --data-dirs exp/*-1000k/inference/*/eval-test_clean-v1* exp/opuslm_v2_stage2_pretrain_base/inference/inference_audio_step_350000/eval-test_clean-v1-* exp/{minguniaudioedit,stepaudiox,cv3}/test_clean/speech_edit
 
-python local_eval/eval_parallel.py --gpus 0,1,2,3,4,5,6,7 --max-workers-per-gpu 2 --config local_eval/eval/eval.yaml --metadata data/test_clean/audio_edit-v2 --data-dirs exp/*-1000k/inference/*/eval-test_clean_audioset-v2* exp/opuslm_v2_stage2_pretrain_base/inference/inference_audio_step_350000/eval-test_clean_audioset-v2-tgt2audio exp/audioldm2/test_clean/audio_edit-v2
+python local_eval/eval_parallel.py --gpus 0,1,2,3,4,5,6,7 --max-workers-per-gpu 2 --config local_eval/eval/eval.yaml --metadata data/test_clean/audio_edit-v2 --data-dirs exp/*-1000k/inference/*/eval-test_clean_audioset-v2* exp/opuslm_v2_stage2_pretrain_base/inference/inference_audio_step_350000/eval-test_clean_audioset-v2-* exp/audioldm2/test_clean/audio_edit-v2
 
-python local_eval/eval_parallel.py --gpus 0,1,2,3,4,5,6,7 --max-workers-per-gpu 2 --config local_eval/eval/eval.yaml --metadata data/test_clean/freeform-edit --data-dirs exp/*-1000k/inference/*/eval-test_clean_audioset-v3* exp/opuslm_v2_stage2_pretrain_base/inference/inference_audio_step_350000/eval-test_clean_audioset-v3-tgt2audio
+python local_eval/eval_parallel.py --gpus 0,1,2,3,4,5,6,7 --max-workers-per-gpu 2 --config local_eval/eval/eval.yaml --metadata data/test_clean/freeform-edit --data-dirs exp/*-1000k/inference/*/eval-test_clean_audioset-v3* exp/opuslm_v2_stage2_pretrain_base/inference/inference_audio_step_350000/eval-test_clean_audioset-v3-*
 
 # python local_eval/eval_parallel.py --gpus 4,5,6,7 --max-workers-per-gpu 2 --config local_eval/eval/eval.yaml --metadata data/test_clean/speech_edit --data-dirs exp/minguniaudioedit/test_clean/speech_edit
+
+
+python local_eval/eval_parallel.py --gpus 4,5,6,7 --max-workers-per-gpu 2 --config local_eval/eval/eval.yaml --metadata data/test_clean/speech_edit --data-dirs $dir/eval-test_clean-v1-t2a_t2a
+python local_eval/eval_parallel.py --gpus 4,5,6,7 --max-workers-per-gpu 2 --config local_eval/eval/eval.yaml --metadata data/test_clean/audio_edit-v2 --data-dirs $dir/eval-test_clean_audioset-v2-t2a_t2a
+python local_eval/eval_parallel.py --gpus 4,5,6,7 --max-workers-per-gpu 2 --config local_eval/eval/eval.yaml --metadata data/test_clean/freeform-edit --data-dirs $dir/eval-test_clean_audioset-v3-t2a_t2a

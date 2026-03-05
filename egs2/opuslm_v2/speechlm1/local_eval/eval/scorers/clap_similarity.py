@@ -216,7 +216,7 @@ class CLAPSimilarityScorer(BaseScorer):
     @staticmethod
     def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
         """Cosine similarity between two (1, D) vectors."""
-        return F.cosine_similarity(torch.from_numpy(a), torch.from_numpy(b)).item()
+        return F.cosine_similarity(torch.from_numpy(a), torch.from_numpy(b), dim=0).item()
 
     def _get_rewritten_label(self, meta_sub: dict[str, Any] | None) -> str | None:
         """Extract caption + human_labels from *meta_sub* and optionally

@@ -27,7 +27,7 @@ _llm_judge_system_prompt: &llm_judge_sys |-
 # ============================================================================
 scorers:
   asr_wer:
-    resume: false
+    # resume: false
     model_name: openai/whisper-large-v3
     batch_size: 24
     language: en
@@ -37,6 +37,7 @@ scorers:
     device: "cuda"
 
   speaker_similarity_wavlm:
+    # resume: false
     model_name: "wavlm_large"
     checkpoint: ./downloads/wavlm_large_finetune.pth
     device: "cuda"
@@ -45,7 +46,7 @@ scorers:
   llm_judge_gemini:
     # resume: false
     batch_size: 512
-    max_samples: 1
+    max_samples: 100
     model_kwargs:
       model: "gemini-3-flash-preview"
 
@@ -61,7 +62,7 @@ scorers:
     #   max_tokens: 1024
 
   llm_judge_caption_llm:
-    resume: false
+    # resume: false
     batch_size: 256
     captioner:
       base_url: "http://cnode1-004:8000/v1,http://cnode1-004:8001/v1,http://cnode1-004:8003/v1,http://cnode1-004:8004/v1,http://cnode1-004:8005/v1,http://cnode1-004:8006/v1,http://cnode1-004:8007/v1"
@@ -124,6 +125,7 @@ scorers:
       batch_size: 32
 
   clap_similarity:
+    # resume: false
     enable_fusion: false
     device: cuda
     vllm_client:
@@ -168,38 +170,59 @@ audio_edit_anchors:
     # --- Qwen3-Omni (audio → direct judge) ---
     - name: llm_judge_openai
       score_key: score
-      score_keys: [score, edit_fidelity, audio_quality, coherence, preservation]
-      audio_keys: [eval_audio_path]
-      system_prompt: |-
-        You are an expert audio evaluator. You will listen to a GENERATED audio
-        that was created by ADDING a new sound element onto an original audio
-        track. Both the original content and the added element should coexist
-        simultaneously in the result.
-
-        Evaluate the following dimensions:
-        1. edit_fidelity (1-5): Is the added element clearly audible in the
-           audio? 5 = fully present and prominent, 1 = completely absent.
-        2. audio_quality (1-5): Production quality — clarity, absence of
-           artifacts, distortion, or clipping.
-        3. coherence (1-5): Do the combined layers blend into a natural,
-           unified audio scene? (1 = jarring / artificial, 5 = seamless)
-        4. preservation (1-5): Are the original audio characteristics preserved
-           without degradation?
-        5. score (1-5): Holistic overall assessment.
-
-        Output ONLY valid JSON:
-        {"edit_fidelity": <1-5>, "audio_quality": <1-5>, "coherence": <1-5>, "preservation": <1-5>, "score": <1-5>, "reason": "<≤60 words>"}
+      score_keys: [score, consistency, change_quality]
+      audio_keys: [audio_path, eval_audio_path]
       user_prompt: |-
-        ## Edit Instruction
+        You are an extremely strict, meticulous audio engineer and sound design expert. You are evaluating an ADD operation: Audio2 was created by layering a new sound element onto Audio1.
+
+        You must base your judgment ONLY on:
+        - Audio1 (original)
+        - Audio2 (edited)
+        - Edit-Prompt (instruction)
+
+        Ignore any captions/descriptions entirely, even if provided.
+
+        ## Edit-Prompt
         {{ edit_prompt }}
 
-        ## Original Audio Description (before the edit)
+        ## Original Audio Description
         {{ audio_caption }}
 
-        ## Description of the Element Being Added
+        ## Element Being Added
         {{ add_audio_caption }}
 
-        Listen to the audio and evaluate how well the ADD operation was performed.
+        ## Task
+        Compare Audio1 vs Audio2 and judge whether Audio2:
+        (A) Preserves all original content that should NOT have changed (consistency), and
+        (B) Successfully adds the requested element with natural blending (change quality).
+
+        Use a very strict grading curve:
+        5 = near-flawless, professional/studio-quality.
+        Most typical AI outputs should fall in the 2–3 range.
+
+        ## Metrics (ONLY these)
+        1) consistency (1-5): Preservation / Faithfulness
+          Did Audio2 preserve the original audio content from Audio1 without degradation?
+          Check for: damage to original elements, altered timing/rhythm, unexpected volume changes, removed content, tonal shifts, or AI artifacts that corrupt the original character.
+          5 = original content fully preserved and natural
+          3 = mostly preserved but noticeable degradation or alterations
+          1 = original content severely damaged or unrecognizable
+
+        2) change_quality (1-5): Change Execution Quality
+          Is the added element clearly audible in Audio2 and does it blend naturally with the original?
+          Check for: missing/faint added element, unnatural layering, loudness mismatch, spectral clashes, phase issues, artifacts at blend boundaries, or incoherent scene composition.
+          5 = added element is present, well-balanced, and seamlessly blended
+          3 = added element is present but blending/balance is noticeably off
+          1 = added element is absent or completely fails to integrate
+
+        3) score (1-5): Overall (NOT a simple average)
+          If there is any critical failure (added element missing OR original content severely damaged), the overall score must drop significantly.
+          Score 5 should be rare and only given when both metrics are near-perfect.
+
+        ## Output format
+        Output ONLY valid JSON. Do not include any extra text.
+        Use EXACTLY these keys (do not add others):
+        {"consistency": <1-5>, "change_quality": <1-5>, "score": <1-5>, "reason": "<<=60 words; cite concrete flaws and justify deductions>"}
 
     # # --- Captioner + LLM Judge ---
     # - name: llm_judge_caption_llm
@@ -297,40 +320,59 @@ audio_edit_anchors:
     # --- Qwen3-Omni ---
     - name: llm_judge_openai
       score_key: score
-      score_keys: [score, edit_fidelity, audio_quality, coherence, preservation]
-      audio_keys: [eval_audio_path]
-      system_prompt: |-
-        You are an expert audio evaluator. You will listen to a GENERATED audio
-        from which a specific sound element should have been REMOVED. The
-        removed element should be completely absent, while all other content
-        should remain intact.
-
-        Evaluate the following dimensions:
-        1. edit_fidelity (1-5): Is the element that should be removed
-           actually absent from the audio? 5 = completely removed,
-           1 = still fully audible.
-        2. audio_quality (1-5): Production quality — check for removal
-           artifacts such as spectral holes, phase issues, clicks, or unnatural
-           silences.
-        3. coherence (1-5): Does the remaining audio sound complete and
-           natural, not hollow, broken, or missing content?
-        4. preservation (1-5): Are elements that should remain preserved
-           intact, without collateral damage from the removal process?
-        5. score (1-5): Holistic overall assessment.
-
-        Output ONLY valid JSON:
-        {"edit_fidelity": <1-5>, "audio_quality": <1-5>, "coherence": <1-5>, "preservation": <1-5>, "score": <1-5>, "reason": "<≤60 words>"}
+      score_keys: [score, consistency, change_quality]
+      audio_keys: [audio_path, eval_audio_path]
       user_prompt: |-
-        ## Edit Instruction
+        You are an extremely strict, meticulous audio engineer and sound design expert. You are evaluating a REMOVE operation: Audio2 was created by removing a specific sound element from Audio1.
+
+        You must base your judgment ONLY on:
+        - Audio1 (original, contains the element to be removed)
+        - Audio2 (edited, element should be absent)
+        - Edit-Prompt (instruction)
+
+        Ignore any captions/descriptions entirely, even if provided.
+
+        ## Edit-Prompt
         {{ edit_prompt }}
 
-        ## Original Audio Description (before removal — contains the element)
+        ## Original Audio Description
         {{ audio_caption }}
 
         ## Element That Should Be Removed
         {{ remove_audio_caption }}
 
-        Listen to the audio and evaluate how well the REMOVE operation was performed.
+        ## Task
+        Compare Audio1 vs Audio2 and judge whether Audio2:
+        (A) Preserves all content that should NOT have changed (consistency), and
+        (B) Successfully removes the target element cleanly (change quality).
+
+        Use a very strict grading curve:
+        5 = near-flawless, professional/studio-quality.
+        Most typical AI outputs should fall in the 2–3 range.
+
+        ## Metrics (ONLY these)
+        1) consistency (1-5): Preservation / Faithfulness
+          Did Audio2 preserve all audio content from Audio1 EXCEPT the removed element?
+          Check for: collateral damage to remaining sounds, altered timing/rhythm, unnatural silences or gaps where content should remain, tonal shifts, or AI artifacts corrupting preserved elements.
+          5 = all non-target content fully preserved and natural
+          3 = mostly preserved but noticeable collateral damage or gaps
+          1 = severe damage to content that should have been kept
+
+        2) change_quality (1-5): Change Execution Quality
+          Is the target element completely and cleanly removed from Audio2?
+          Check for: residual traces of the removed element, spectral holes, phase artifacts, clicks/pops at removal boundaries, unnatural silence patches, or remnant sounds that should be gone.
+          5 = element fully removed with no audible artifacts
+          3 = mostly removed but residual traces or removal artifacts remain
+          1 = element still clearly present or removal causes severe artifacts
+
+        3) score (1-5): Overall (NOT a simple average)
+          If there is any critical failure (element still present OR remaining content severely damaged), the overall score must drop significantly.
+          Score 5 should be rare and only given when both metrics are near-perfect.
+
+        ## Output format
+        Output ONLY valid JSON. Do not include any extra text.
+        Use EXACTLY these keys (do not add others):
+        {"consistency": <1-5>, "change_quality": <1-5>, "score": <1-5>, "reason": "<<=60 words; cite concrete flaws and justify deductions>"}
 
     # # --- Captioner + LLM Judge ---
     # - name: llm_judge_caption_llm
@@ -428,33 +470,22 @@ audio_edit_anchors:
     # --- Qwen3-Omni ---
     - name: llm_judge_openai
       score_key: score
-      score_keys: [score, edit_fidelity, audio_quality, coherence, preservation]
-      audio_keys: [eval_audio_path]
-      system_prompt: |-
-        You are an expert audio evaluator. You will listen to a GENERATED audio
-        where one sound element was REPLACED with another. The old element
-        should be absent, the new element should be present, and all other
-        content should remain intact.
-
-        Evaluate the following dimensions:
-        1. edit_fidelity (1-5): Was the old element removed AND the new
-           element successfully added? 5 = swap fully successful,
-           1 = completely failed.
-        2. audio_quality (1-5): Production quality — clarity, absence of
-           artifacts, distortion, or crossfade issues.
-        3. coherence (1-5): Does the new combination of elements sound
-           natural and well-blended? Is the replacement seamlessly integrated?
-        4. preservation (1-5): Are unchanged elements (the persistent audio
-           content) preserved intact without collateral modification?
-        5. score (1-5): Holistic overall assessment.
-
-        Output ONLY valid JSON:
-        {"edit_fidelity": <1-5>, "audio_quality": <1-5>, "coherence": <1-5>, "preservation": <1-5>, "score": <1-5>, "reason": "<≤60 words>"}
+      score_keys: [score, consistency, change_quality]
+      audio_keys: [audio_path, eval_audio_path]
       user_prompt: |-
-        ## Edit Instruction
+        You are an extremely strict, meticulous audio engineer and sound design expert. You are evaluating a REPLACE operation: Audio2 was created by removing one sound element from Audio1 and replacing it with a different element.
+
+        You must base your judgment ONLY on:
+        - Audio1 (original, contains the old element)
+        - Audio2 (edited, old element replaced with new element)
+        - Edit-Prompt (instruction)
+
+        Ignore any captions/descriptions entirely, even if provided.
+
+        ## Edit-Prompt
         {{ edit_prompt }}
 
-        ## Original Audio Description (before replacement)
+        ## Original Audio Description
         {{ audio_caption }}
 
         ## Element That Was Removed (old)
@@ -463,7 +494,38 @@ audio_edit_anchors:
         ## Element That Was Added (new)
         {{ add_audio_caption }}
 
-        Listen to the audio and evaluate how well the REPLACE operation was performed.
+        ## Task
+        Compare Audio1 vs Audio2 and judge whether Audio2:
+        (A) Preserves all content that should NOT have changed (consistency), and
+        (B) Successfully swaps the old element for the new one naturally (change quality).
+
+        Use a very strict grading curve:
+        5 = near-flawless, professional/studio-quality.
+        Most typical AI outputs should fall in the 2–3 range.
+
+        ## Metrics (ONLY these)
+        1) consistency (1-5): Preservation / Faithfulness
+          Did Audio2 preserve all audio content from Audio1 EXCEPT the replaced element?
+          Check for: collateral damage to surrounding sounds, altered timing/rhythm, unintended removals/additions beyond the swap, tonal shifts, or AI artifacts corrupting preserved elements.
+          5 = all non-target content fully preserved and natural
+          3 = mostly preserved but noticeable collateral damage
+          1 = severe damage to content that should have been kept
+
+        2) change_quality (1-5): Change Execution Quality
+          Is the old element absent AND the new element clearly present and naturally integrated?
+          Check for: residual old element, missing/faint new element, unnatural transitions, timbre/reverb/loudness mismatch between the new element and surrounding audio, phase issues, or awkward blend boundaries.
+          5 = swap fully executed with seamless integration
+          3 = swap is partially done but with noticeable issues in removal or integration
+          1 = swap failed — old element persists, new element absent, or both
+
+        3) score (1-5): Overall (NOT a simple average)
+          If there is any critical failure (swap not executed OR preserved content severely damaged), the overall score must drop significantly.
+          Score 5 should be rare and only given when both metrics are near-perfect.
+
+        ## Output format
+        Output ONLY valid JSON. Do not include any extra text.
+        Use EXACTLY these keys (do not add others):
+        {"consistency": <1-5>, "change_quality": <1-5>, "score": <1-5>, "reason": "<<=60 words; cite concrete flaws and justify deductions>"}
 
     # # --- Captioner + LLM Judge ---
     # - name: llm_judge_caption_llm
@@ -569,39 +631,53 @@ audio_edit_anchors:
     # --- Qwen3-Omni ---
     - name: llm_judge_openai
       score_key: score
-      score_keys: [score, edit_fidelity, audio_quality, creativity, coherence]
-      audio_keys: [eval_audio_path]
-      system_prompt: |-
-        You are an expert audio evaluator. You will listen to a GENERATED audio
-        that was created by applying a CREATIVE EDIT to an original audio based
-        on a natural-language instruction. The edit may transform the scene,
-        mood, genre, setting, or any other acoustic aspect.
-
-        Evaluate the following dimensions:
-        1. edit_fidelity (1-5): Does the audio reflect the requested
-           creative edit? 5 = transformation fully evident,
-           1 = no meaningful change or wrong transformation.
-        2. audio_quality (1-5): Production quality — clarity, naturalness,
-           absence of artifacts.
-        3. creativity (1-5): How interesting, vivid, and creative is the
-           result? Does it go beyond the obvious?
-        4. coherence (1-5): Does the resulting audio form a plausible,
-           self-consistent audio scene?
-        5. score (1-5): Holistic overall assessment.
-
-        Output ONLY valid JSON:
-        {"edit_fidelity": <1-5>, "audio_quality": <1-5>, "creativity": <1-5>, "coherence": <1-5>, "score": <1-5>, "reason": "<≤60 words>"}
+      score_keys: [score, consistency, change_quality]
+      audio_keys: [audio_path, eval_audio_path]
       user_prompt: |-
-        ## Edit Instruction
+        You are an extremely strict, meticulous audio engineer and sound design expert. You are evaluating a CREATIVE EDIT: Audio2 is a freeform transformation of Audio1 based on a natural-language instruction.
+
+        You must base your judgment ONLY on:
+        - Audio1 (original)
+        - Audio2 (edited)
+        - Edit-Prompt (instruction)
+
+        Ignore any captions/descriptions entirely, even if provided.
+
+        ## Edit-Prompt
         {{ edit_prompt }}
 
-        ## Original Audio Description (before the creative edit)
-        {{ source_caption }}
+        ## Task
+        Compare Audio1 vs Audio2 and judge whether Audio2:
+        (A) Preserves what should NOT have changed (consistency), and
+        (B) Implements the requested changes well (change quality).
 
-        ## Expected Result Description
-        {{ target_caption }}
+        Use a very strict grading curve:
+        5 = near-flawless, professional/studio-quality.
+        Most typical AI outputs should fall in the 2–3 range.
 
-        Listen to the audio and evaluate how well the creative edit was applied.
+        ## Metrics (ONLY these)
+        1) consistency (1-5): Preservation / Faithfulness
+          Did Audio2 preserve the key elements of Audio1 that were NOT requested to change?
+          Check for: damage to the main subject, broken timing/groove, unnatural shifts in room tone/reverb, unintended removals/additions, or AI artifacts that alter the original character.
+          5 = fully preserved and natural
+          3 = mostly preserved but noticeable deviations
+          1 = major unintended changes or loss of core identity
+
+        2) change_quality (1-5): Change Execution Quality
+          Did Audio2 perform ALL required changes specified by the Edit-Prompt, and do they sound natural and usable?
+          Check for: missing/incorrect edits, awkward cuts, unnatural transitions, mismatched timbre/reverb/loudness, metallic ringing, phase issues, smearing, distortion, etc.
+          5 = edits are accurate and seamless
+          3 = main change is present but details/naturalness are lacking
+          1 = core requested change is not achieved or is severely unnatural
+
+        3) score (1-5): Overall (NOT a simple average)
+          If there is any critical failure (missing core requested change OR severely harming consistency), the overall score must drop significantly.
+          Score 5 should be rare and only given when both metrics are near-perfect.
+
+        ## Output format
+        Output ONLY valid JSON. Do not include any extra text.
+        Use EXACTLY these keys (do not add others):
+        {"consistency": <1-5>, "change_quality": <1-5>, "score": <1-5>, "reason": "<<=60 words; cite concrete flaws and justify deductions>"}
 
     # --- Captioner + Embedding Similarity ---
     # Flow: captioner generates a caption for eval_audio_path, then cosine
@@ -615,36 +691,53 @@ audio_edit_anchors:
     # --- Gemini ---
     - name: llm_judge_gemini
       score_key: score
-      score_keys: [score, edit_fidelity, audio_quality, creativity, coherence]
-      audio_keys: [eval_audio_path]
+      score_keys: [score, consistency, change_quality]
+      audio_keys: [audio_path, eval_audio_path]
       user_prompt: |-
-        Listen to the audio carefully. This audio was created by applying a
-        CREATIVE EDIT — a freeform transformation based on a natural-language
-        instruction.
+        You are an extremely strict, meticulous audio engineer and sound design expert. You are evaluating a CREATIVE EDIT: Audio2 is a freeform transformation of Audio1 based on a natural-language instruction.
 
-        ## Edit Instruction
+        You must base your judgment ONLY on:
+        - Audio1 (original)
+        - Audio2 (edited)
+        - Edit-Prompt (instruction)
+
+        Ignore any captions/descriptions entirely, even if provided.
+
+        ## Edit-Prompt
         {{ edit_prompt }}
 
-        ## Original Audio Description
-        {{ source_caption }}
+        ## Task
+        Compare Audio1 vs Audio2 and judge whether Audio2:
+        (A) Preserves what should NOT have changed (consistency), and
+        (B) Implements the requested changes well (change quality).
 
-        ## Expected Result Description
-        {{ target_caption }}
+        Use a very strict grading curve:
+        5 = near-flawless, professional/studio-quality.
+        Most typical AI outputs should fall in the 2–3 range.
 
-        Evaluate:
-        1. edit_fidelity (1-5): Does the audio reflect the requested
-           creative transformation? 5 = fully evident, 1 = no change.
-        2. audio_quality (1-5): Production quality, naturalness, artifacts.
-        3. creativity (1-5): How interesting and vivid is the result?
-        4. coherence (1-5): Does the audio form a plausible, self-consistent
-           scene?
-        5. score (1-5): Overall quality.
+        ## Metrics (ONLY these)
+        1) consistency (1-5): Preservation / Faithfulness
+          Did Audio2 preserve the key elements of Audio1 that were NOT requested to change?
+          Check for: damage to the main subject, broken timing/groove, unnatural shifts in room tone/reverb, unintended removals/additions, or AI artifacts that alter the original character.
+          5 = fully preserved and natural
+          3 = mostly preserved but noticeable deviations
+          1 = major unintended changes or loss of core identity
 
-        Output ONLY valid JSON:
-        {"edit_fidelity": <1-5>, "audio_quality": <1-5>, "creativity": <1-5>, "coherence": <1-5>, "score": <1-5>, "reason": "<≤60 words>"}
+        2) change_quality (1-5): Change Execution Quality
+          Did Audio2 perform ALL required changes specified by the Edit-Prompt, and do they sound natural and usable?
+          Check for: missing/incorrect edits, awkward cuts, unnatural transitions, mismatched timbre/reverb/loudness, metallic ringing, phase issues, smearing, distortion, etc.
+          5 = edits are accurate and seamless
+          3 = main change is present but details/naturalness are lacking
+          1 = core requested change is not achieved or is severely unnatural
 
+        3) score (1-5): Overall (NOT a simple average)
+          If there is any critical failure (missing core requested change OR severely harming consistency), the overall score must drop significantly.
+          Score 5 should be rare and only given when both metrics are near-perfect.
 
-
+        ## Output format
+        Output ONLY valid JSON. Do not include any extra text.
+        Use EXACTLY these keys (do not add others):
+        {"consistency": <1-5>, "change_quality": <1-5>, "score": <1-5>, "reason": "<<=60 words; cite concrete flaws and justify deductions>"}
 
 # ============================================================================
 # Tasks
@@ -695,12 +788,20 @@ tasks:
       # - name: speaker_similarity_wespeaker
 
       - name: llm_judge_openai
+        score_key: score
+        score_keys: [score, consistency, change_quality]
         audio_keys: [audio_path, eval_audio_path]
-        system_prompt: *llm_judge_sys
         user_prompt: &add_para_user |-
-          The first audio is **Audio A** (original), the second is **Audio B** (edited).
+          You are an extremely strict, meticulous audio engineer and speech expert. You are evaluating a PARALINGUISTIC INSERTION: Audio2 was created by adding a paralinguistic event (e.g., laughter, cough, breath, filler word) into Audio1's speech.
 
-          ## Edit Instruction
+          You must base your judgment ONLY on:
+          - Audio1 (original speech)
+          - Audio2 (edited speech with paralinguistic insertion)
+          - Edit-Prompt (instruction)
+
+          Ignore any captions/descriptions entirely, even if provided.
+
+          ## Edit-Prompt
           {{ edit_prompt }}
 
           {% if target_text is defined and target_text %}
@@ -708,19 +809,38 @@ tasks:
           {{ target_text }}
           {% endif %}
 
-          Compare Audio A and Audio B, then evaluate the paralinguistic edit on these aspects:
+          ## Task
+          Compare Audio1 vs Audio2 and judge whether Audio2:
+          (A) Preserves the original speech content and speaker identity (consistency), and
+          (B) Correctly inserts the paralinguistic event at the right position naturally (change quality).
 
-          1. **paralinguistic_presence** (1-5): Is the specified paralinguistic feature
-             (e.g., laughter, cough, breath, filler) clearly audible in Audio B?
-          2. **position_accuracy** (1-5): Does the paralinguistic event occur at the
-             correct position as described in the edit instruction?
-          3. **content_preservation** (1-5): Is the surrounding speech content (words,
-             meaning) from Audio A fully preserved in Audio B?
-          4. **naturalness** (1-5): Does the paralinguistic insertion in Audio B sound
-             natural and seamlessly blended with the speech?
+          Use a very strict grading curve:
+          5 = near-flawless, professional/studio-quality.
+          Most typical AI outputs should fall in the 2–3 range.
 
-          Output ONLY valid JSON:
-          {"paralinguistic_presence": <1-5>, "position_accuracy": <1-5>, "content_preservation": <1-5>, "naturalness": <1-5>, "reason": "brief explanation"}
+          ## Metrics (ONLY these)
+          1) consistency (1-5): Preservation / Faithfulness
+            Did Audio2 preserve the speech content (words, meaning) and speaker characteristics from Audio1?
+            Check for: missing/altered words, changed speaker identity/timbre, broken prosody, timing shifts in surrounding speech, or AI artifacts corrupting the original speech.
+            5 = speech content and speaker fully preserved
+            3 = mostly preserved but noticeable word changes or speaker drift
+            1 = significant speech content loss or speaker identity change
+
+          2) change_quality (1-5): Change Execution Quality
+            Is the paralinguistic event clearly audible at the correct position and does it sound natural?
+            Check for: missing/inaudible event, wrong position, unnatural sounding event, awkward transitions into/out of the event, forced or robotic quality, or timing misalignment with surrounding speech.
+            5 = event is present, correctly positioned, and seamlessly natural
+            3 = event is present but position or naturalness is noticeably off
+            1 = event is absent, at completely wrong position, or sounds severely unnatural
+
+          3) score (1-5): Overall (NOT a simple average)
+            If there is any critical failure (event missing/misplaced OR speech content severely altered), the overall score must drop significantly.
+            Score 5 should be rare and only given when both metrics are near-perfect.
+
+          ## Output format
+          Output ONLY valid JSON. Do not include any extra text.
+          Use EXACTLY these keys (do not add others):
+          {"consistency": <1-5>, "change_quality": <1-5>, "score": <1-5>, "reason": "<<=60 words; cite concrete flaws and justify deductions>"}
 
       - name: llm_judge_gemini
         audio_keys: [audio_path, eval_audio_path]
@@ -741,12 +861,20 @@ tasks:
       - name: speaker_similarity_wavlm
 
       - name: llm_judge_openai
+        score_key: score
+        score_keys: [score, consistency, change_quality]
         audio_keys: [audio_path, eval_audio_path]
-        system_prompt: *llm_judge_sys
         user_prompt: &style_whisper_user |-
-          The first audio is **Audio A** (original), the second is **Audio B** (edited).
+          You are an extremely strict, meticulous audio engineer and speech expert. You are evaluating a SPEAKING STYLE EDIT: Audio2 was created by changing the speaking style of Audio1 (e.g., whispering, fast/slow pace, pitch/tone change).
 
-          ## Edit Instruction
+          You must base your judgment ONLY on:
+          - Audio1 (original speech)
+          - Audio2 (edited speech with style change)
+          - Edit-Prompt (instruction)
+
+          Ignore any captions/descriptions entirely, even if provided.
+
+          ## Edit-Prompt
           {{ edit_prompt }}
 
           {% if target_audio_caption is defined and target_audio_caption %}
@@ -754,20 +882,38 @@ tasks:
           {{ target_audio_caption }}
           {% endif %}
 
-          Compare Audio A and Audio B, then evaluate the speaking-style edit on these aspects:
+          ## Task
+          Compare Audio1 vs Audio2 and judge whether Audio2:
+          (A) Preserves the speech content and speaker identity (consistency), and
+          (B) Successfully applies the requested style change clearly and naturally (change quality).
 
-          1. **style_conformity** (1-5): Does Audio B's speaking style accurately match
-             the target style described in the edit instruction (e.g., whispering,
-             fast/slow pace, pitch/tone change)?
-          2. **content_preservation** (1-5): Is the speech content (words, meaning) from
-             Audio A fully preserved in Audio B despite the style change?
-          3. **expressiveness** (1-5): Is the style change clearly perceived and
-             effectively conveyed when comparing Audio B to Audio A?
-          4. **audio_quality** (1-5): Is Audio B's overall audio quality maintained
-             without noticeable artifacts, distortion, or degradation?
+          Use a very strict grading curve:
+          5 = near-flawless, professional/studio-quality.
+          Most typical AI outputs should fall in the 2–3 range.
 
-          Output ONLY valid JSON:
-          {"style_conformity": <1-5>, "content_preservation": <1-5>, "expressiveness": <1-5>, "audio_quality": <1-5>, "reason": "brief explanation"}
+          ## Metrics (ONLY these)
+          1) consistency (1-5): Preservation / Faithfulness
+            Did Audio2 preserve the speech content (words, meaning) and core speaker identity from Audio1?
+            Check for: missing/altered words, broken sentences, unintended changes beyond the style edit, loss of intelligibility, or AI artifacts corrupting original speech content.
+            5 = speech content fully preserved and intelligible
+            3 = mostly preserved but noticeable word errors or intelligibility loss
+            1 = significant speech content loss or completely unintelligible
+
+          2) change_quality (1-5): Change Execution Quality
+            Does Audio2 clearly and convincingly exhibit the target speaking style?
+            Check for: insufficient style change (sounds identical to original), wrong style applied, forced/robotic quality, unnatural prosody, inconsistent style throughout, artifacts from style transformation, or degraded audio quality.
+            5 = style change is clear, convincing, and natural throughout
+            3 = style change is partially achieved but inconsistent or unnatural
+            1 = style change is absent, wrong, or severely degrades the speech
+
+          3) score (1-5): Overall (NOT a simple average)
+            If there is any critical failure (style not applied OR speech content severely damaged), the overall score must drop significantly.
+            Score 5 should be rare and only given when both metrics are near-perfect.
+
+          ## Output format
+          Output ONLY valid JSON. Do not include any extra text.
+          Use EXACTLY these keys (do not add others):
+          {"consistency": <1-5>, "change_quality": <1-5>, "score": <1-5>, "reason": "<<=60 words; cite concrete flaws and justify deductions>"}
 
       - name: llm_judge_gemini
         audio_keys: [audio_path, eval_audio_path]
@@ -789,12 +935,20 @@ tasks:
       - name: emotion_modelscope
 
       - name: llm_judge_openai
+        score_key: score
+        score_keys: [score, consistency, change_quality]
         audio_keys: [audio_path, eval_audio_path]
-        system_prompt: *llm_judge_sys
         user_prompt: &style_emotion_user |-
-          The first audio is **Audio A** (original), the second is **Audio B** (edited).
+          You are an extremely strict, meticulous audio engineer and speech expert. You are evaluating an EMOTION EDIT: Audio2 was created by changing the emotional expression of Audio1's speech (e.g., happy, sad, angry, surprised).
 
-          ## Edit Instruction
+          You must base your judgment ONLY on:
+          - Audio1 (original speech)
+          - Audio2 (edited speech with emotion change)
+          - Edit-Prompt (instruction)
+
+          Ignore any captions/descriptions entirely, even if provided.
+
+          ## Edit-Prompt
           {{ edit_prompt }}
 
           {% if target_audio_caption is defined and target_audio_caption %}
@@ -802,19 +956,38 @@ tasks:
           {{ target_audio_caption }}
           {% endif %}
 
-          Compare Audio A and Audio B, then evaluate the emotion edit on these aspects:
+          ## Task
+          Compare Audio1 vs Audio2 and judge whether Audio2:
+          (A) Preserves the speech content and speaker identity (consistency), and
+          (B) Successfully conveys the target emotion clearly and naturally (change quality).
 
-          1. **emotion_conformity** (1-5): Does Audio B's emotional expression clearly
-             and accurately match the target emotion (e.g., happy, sad, angry, surprised)?
-          2. **content_preservation** (1-5): Is the speech content (words, meaning) from
-             Audio A fully preserved in Audio B despite the emotion change?
-          3. **expressiveness** (1-5): Is the emotion in Audio B convincingly and clearly
-             conveyed, sounding genuine rather than forced or robotic?
-          4. **audio_quality** (1-5): Is Audio B's overall audio quality maintained
-             without noticeable artifacts, distortion, or degradation?
+          Use a very strict grading curve:
+          5 = near-flawless, professional/studio-quality.
+          Most typical AI outputs should fall in the 2–3 range.
 
-          Output ONLY valid JSON:
-          {"emotion_conformity": <1-5>, "content_preservation": <1-5>, "expressiveness": <1-5>, "audio_quality": <1-5>, "reason": "brief explanation"}
+          ## Metrics (ONLY these)
+          1) consistency (1-5): Preservation / Faithfulness
+            Did Audio2 preserve the speech content (words, meaning) and core speaker identity from Audio1?
+            Check for: missing/altered words, broken sentences, changed speaker timbre beyond what emotion naturally requires, unintended content modifications, or AI artifacts corrupting original speech.
+            5 = speech content and speaker identity fully preserved
+            3 = mostly preserved but noticeable word errors or unintended speaker changes
+            1 = significant speech content loss or speaker identity unrecognizable
+
+          2) change_quality (1-5): Change Execution Quality
+            Does Audio2 convincingly and genuinely express the target emotion?
+            Check for: wrong emotion conveyed, flat/unconvincing expression, forced/robotic quality, exaggerated/caricature-like delivery, inconsistent emotion throughout, or audio degradation from the transformation.
+            5 = emotion is clear, genuine, and naturally conveyed throughout
+            3 = emotion is partially present but unconvincing or inconsistent
+            1 = target emotion is absent, wrong emotion is conveyed, or expression is severely unnatural
+
+          3) score (1-5): Overall (NOT a simple average)
+            If there is any critical failure (wrong/absent emotion OR speech content severely damaged), the overall score must drop significantly.
+            Score 5 should be rare and only given when both metrics are near-perfect.
+
+          ## Output format
+          Output ONLY valid JSON. Do not include any extra text.
+          Use EXACTLY these keys (do not add others):
+          {"consistency": <1-5>, "change_quality": <1-5>, "score": <1-5>, "reason": "<<=60 words; cite concrete flaws and justify deductions>"}
 
       - name: llm_judge_gemini
         audio_keys: [audio_path, eval_audio_path]
@@ -865,27 +1038,54 @@ tasks:
   audio_effect_reverb:
     scorers:
       - name: llm_judge_openai
+        score_key: score
+        score_keys: [score, consistency, change_quality]
         audio_keys: [audio_path, eval_audio_path]
-        system_prompt: *llm_judge_sys
         user_prompt: &reverb_user |-
-          The first audio is **Audio A** (original, no reverb), the second is **Audio B** (edited).
+          You are an extremely strict, meticulous audio engineer and acoustics expert. You are evaluating a REVERB EFFECT: Audio2 was created by applying reverberation/echo to Audio1.
 
-          ## Edit Instruction
+          You must base your judgment ONLY on:
+          - Audio1 (original, dry audio)
+          - Audio2 (edited, with reverb applied)
+          - Edit-Prompt (instruction)
+
+          Ignore any captions/descriptions entirely, even if provided.
+
+          ## Edit-Prompt
           {{ edit_prompt }}
 
-          Compare Audio A and Audio B, then evaluate the reverb effect on these aspects:
+          ## Task
+          Compare Audio1 vs Audio2 and judge whether Audio2:
+          (A) Preserves the speech content and intelligibility (consistency), and
+          (B) Successfully applies natural-sounding reverb as instructed (change quality).
 
-          1. **effect_presence** (1-5): Is the reverberation / echo effect clearly and
-             appropriately present in Audio B compared to the dry Audio A?
-          2. **intelligibility** (1-5): Despite the reverb in Audio B, is the speech
-             content still clearly intelligible and understandable?
-          3. **naturalness** (1-5): Does Audio B's reverb sound like a natural acoustic
-             environment (e.g., room, hall) rather than artificial processing?
-          4. **audio_quality** (1-5): Is Audio B's overall audio quality maintained
-             without excessive distortion, clipping, or unwanted noise compared to Audio A?
+          Use a very strict grading curve:
+          5 = near-flawless, professional/studio-quality.
+          Most typical AI outputs should fall in the 2–3 range.
 
-          Output ONLY valid JSON:
-          {"effect_presence": <1-5>, "intelligibility": <1-5>, "naturalness": <1-5>, "audio_quality": <1-5>, "reason": "brief explanation"}
+          ## Metrics (ONLY these)
+          1) consistency (1-5): Preservation / Faithfulness
+            Did Audio2 preserve the speech content, intelligibility, and speaker identity from Audio1?
+            Check for: lost/garbled words due to excessive reverb, altered speaker timbre beyond reverb effect, unexpected content changes, clipping, or AI artifacts corrupting the original speech.
+            5 = speech fully intelligible and speaker identity preserved
+            3 = mostly intelligible but reverb causes noticeable clarity loss
+            1 = speech unintelligible or speaker identity unrecognizable
+
+          2) change_quality (1-5): Change Execution Quality
+            Is the reverb effect appropriately and naturally applied?
+            Check for: missing/barely perceptible reverb, excessive/overwhelming reverb drowning the speech, unnatural metallic or ringing quality, inconsistent reverb characteristics, artificial-sounding reflections, or processing artifacts.
+            5 = reverb is clearly present, natural, and sounds like a real acoustic space
+            3 = reverb is present but sounds artificial or poorly calibrated
+            1 = reverb is absent, sounds completely artificial, or causes severe degradation
+
+          3) score (1-5): Overall (NOT a simple average)
+            If there is any critical failure (no reverb applied OR speech made unintelligible), the overall score must drop significantly.
+            Score 5 should be rare and only given when both metrics are near-perfect.
+
+          ## Output format
+          Output ONLY valid JSON. Do not include any extra text.
+          Use EXACTLY these keys (do not add others):
+          {"consistency": <1-5>, "change_quality": <1-5>, "score": <1-5>, "reason": "<<=60 words; cite concrete flaws and justify deductions>"}
 
       - name: llm_judge_gemini
         audio_keys: [audio_path, eval_audio_path]

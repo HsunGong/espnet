@@ -45,7 +45,7 @@ class VLLMClient:
         model: Optional[str] = None,
         max_concurrent: int = 65536,
         per_endpoint_concurrent: int = 32,
-        timeout: int = 360,
+        timeout: int = 3600,
         max_retries: int = 3,
         default_kwargs: dict = {},
     ):

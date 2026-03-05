@@ -104,15 +104,15 @@ WER_LINE_CHART_LABELS: dict[str, str] = {
 WER_LINE_CHART_DATASET: str = "transcription_replace_sentence"
 
 # ============================================================================
-# Custom WER violin-chart: experiments to compare side-by-side
+# Custom WER histogram comparison: experiments to compare side-by-side
 # ============================================================================
 # key = label produced by parse_eval_dir  →  value = display name
-WER_VIOLIN_LABELS: dict[str, str] = {
-    "opuslm_v2_stage2_pretrain_base/s350k/tgt2audio":     "Bagpiper-Base",
+WER_HIST_CMP_LABELS: dict[str, str] = {
+    "opuslm_v2_stage2_pretrain_base/s350k/t2a_t2a":      "Bagpiper-Base",
     "ct-c2a_v2-1000k/s359k/cat2split1":                  "Bagpiper-Edit (ST)",
     "ct-mt-t2a_v2-1000k/s356k/t2a_t2a":                  "Bagpiper-Edit (MT)",
 }
-WER_VIOLIN_DATASET: str = "transcription_replace_sentence"
+WER_HIST_CMP_DATASET: str = "transcription_replace_sentence"
 
 
 # ============================================================================
@@ -120,13 +120,22 @@ WER_VIOLIN_DATASET: str = "transcription_replace_sentence"
 # ============================================================================
 # Each bin: (label, lower_inclusive, upper_exclusive) — last bin is open-ended
 WER_BINS: list[tuple[str, float, float]] = [
-    ("0",       0.0, 0.001),   # exact match (WER == 0)
-    ("(0,0.1]", 0.001, 0.1001),
-    ("(0.1,0.2]", 0.1001, 0.2001),
-    ("(0.2,0.3]", 0.2001, 0.3001),
-    ("(0.3,0.5]", 0.3001, 0.5001),
-    ("(0.5,0.8]", 0.5001, 0.8001),
+    ("0.0",       0.0, 0.001),   # exact match (WER == 0)
+    ("(0.0,0.2]", 0.001, 0.1001),
+    ("(0.2,0.4]", 0.2001, 0.4001),
+    ("(0.4,0.6]", 0.4001, 0.6001),
+    ("(0.6,0.8]", 0.6001, 0.8001),
     ("(0.8,1.0]", 0.8001, 1.0001),
+    # ("(0,0.1]", 0.001, 0.1001),
+    # ("(0.1,0.2]", 0.1001, 0.2001),
+    # ("(0.2,0.3]", 0.2001, 0.3001),
+    # ("(0.3,0.4]", 0.3001, 0.4001),
+    # ("(0.4,0.5]", 0.4001, 0.5001),
+    # ("(0.5,0.6]", 0.5001, 0.6001),
+    # ("(0.6,0.7]", 0.6001, 0.7001),
+    # ("(0.7,0.8]", 0.7001, 0.8001),
+    # ("(0.8,0.9]", 0.8001, 0.9001),
+    # ("(0.9,1.0]", 0.9001, 1.0001),
     (">1.0",    1.0001, float("inf")),
 ]
 
@@ -168,7 +177,7 @@ EXTRA_FIELDS: dict[str, list[tuple[str, str]]] = {
     ],
     "llm_judge_openai": [
         ("audio_quality", "audio_quality"),
-        ("edit_fidelity", "edit_fidelity"),
+        ("change_quality", "change_quality"),
         ("coherence", "coherence"),
         ("preservation", "preservation"),
         ("creativity", "creativity"),
@@ -895,28 +904,28 @@ def main():
         if chart_path:
             print(f"  {YELLOW}>>{NOCOLOR} {CYAN}{chart_path}{NOCOLOR}")
 
-    # ---- WER violin plot (matplotlib) ----
-    if WER_VIOLIN_LABELS:
-        violin_dataset = WER_VIOLIN_DATASET
+    # ---- WER histogram comparison subplots (matplotlib) ----
+    if WER_HIST_CMP_LABELS:
+        hist_dataset = WER_HIST_CMP_DATASET
         raw_wer_grouped = collect_raw_wer_scores(args.input_globs)
-        raw_scores = raw_wer_grouped.get(violin_dataset, {})
+        raw_scores = raw_wer_grouped.get(hist_dataset, {})
         if raw_scores:
             print(MAGENTA + f"\n{'#' * 100}" + NOCOLOR)
-            print(f"  {BOLD}{YELLOW}WER VIOLIN PLOT{NOCOLOR}  "
-                  f"(dataset: {CYAN}{violin_dataset}{NOCOLOR})")
+            print(f"  {BOLD}{YELLOW}WER HISTOGRAM COMPARISON{NOCOLOR}  "
+                  f"(dataset: {CYAN}{hist_dataset}{NOCOLOR})")
             print(MAGENTA + f"{'#' * 100}" + NOCOLOR)
-            violin_path = plot_wer_violin(
-                raw_scores, violin_dataset,
-                WER_VIOLIN_LABELS, args.output_dir,
+            hist_path = plot_wer_hist_comparison(
+                raw_scores, hist_dataset,
+                WER_HIST_CMP_LABELS, args.output_dir,
             )
-            if violin_path:
-                print(f"  {YELLOW}>>{NOCOLOR} {CYAN}{violin_path}{NOCOLOR}")
+            if hist_path:
+                print(f"  {YELLOW}>>{NOCOLOR} {CYAN}{hist_path}{NOCOLOR}")
         else:
-            print(f"  {RED}No raw WER scores found for dataset '{violin_dataset}' "
-                  f"— cannot plot violin{NOCOLOR}", file=sys.stderr)
+            print(f"  {RED}No raw WER scores found for dataset '{hist_dataset}' "
+                  f"— cannot plot histogram{NOCOLOR}", file=sys.stderr)
 
 # ============================================================================
-# WER violin plot (matplotlib)
+# WER histogram comparison (matplotlib)
 # ============================================================================
 
 def collect_raw_wer_scores(
@@ -970,99 +979,88 @@ def collect_raw_wer_scores(
 
     return result
 
-def plot_wer_violin(
+def _bin_wer_scores(scores: list[float]) -> list[int]:
+    """Bin a list of WER scores according to WER_BINS. Returns counts per bin."""
+    counts = [0] * len(WER_BINS)
+    for s in scores:
+        for bi, (_label, lo, hi) in enumerate(WER_BINS):
+            if lo <= s < hi:
+                counts[bi] += 1
+                break
+    return counts
+
+
+def plot_wer_hist_comparison(
     raw_scores: dict[str, list[float]],
     dataset: str,
     label_map: dict[str, str],
     output_dir: str,
-    wer_cap: float = 1.0,
 ) -> str | None:
-    import numpy as np
+    """Plot N side-by-side subplots, one histogram per model."""
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
     except ImportError:
-        print("matplotlib/numpy not installed — skipping violin plot", file=sys.stderr)
+        print("matplotlib not installed — skipping histogram", file=sys.stderr)
         return None
 
     names: list[str] = []
-    data: list[np.ndarray] = []
-    
+    binned: list[list[int]] = []
+
     for orig_label, display_name in label_map.items():
         scores = raw_scores.get(orig_label)
         if not scores:
             continue
         names.append(display_name)
-        # 超过 wer_cap 的全部压到 wer_cap 上
-        data.append(np.clip(np.array(scores), 0, wer_cap))
+        binned.append(_bin_wer_scores(scores))
 
-    if len(data) < 2:
+    if not binned:
         return None
 
-    n = len(data)
-    fig, ax = plt.subplots(figsize=(max(3.5 * n, 5), 4))
-    positions = list(range(1, n + 1))
-    colors = ["#4C72B0", "#DD8452", "#55A868", "#C44E52", "#8172B3", "#937860"]
+    n_models = len(binned)
+    n_bins = len(WER_BINS)
+    bin_labels = [b[0] for b in WER_BINS]
 
-    # 使用较小的 bw_method 避免过度平滑
-    parts = ax.violinplot(data, positions=positions, showmeans=False, 
-                          showmedians=False, showextrema=False, bw_method=0.05)
+    # Shared y-max across all subplots
+    global_max = max(max(c) for c in binned)
+    y_max = int(global_max * 1.15) + 1
 
-    for idx, body in enumerate(parts["bodies"]):
-        body.set_facecolor(colors[idx % len(colors)])
-        body.set_edgecolor("black")
-        # body.set_alpha(0.7)
-        
-        # # 裁剪小提琴图的上下边界，形成平头效果
-        # path = body.get_paths()[0]
-        # v = path.vertices
-        # v[:, 1] = np.clip(v[:, 1], 0, wer_cap)
-        # path.vertices = v
+    model_colors = ["#4C72B0", "#DD8452", "#55A868", "#C44E52", "#8172B3", "#937860"]
 
-    # # 绘制自定义的中位数和四分位线
-    # for idx, scores in enumerate(data):
-    #     q1, med, q3 = np.percentile(scores, [25, 50, 75])
-    #     pos = positions[idx]
-    #     ax.vlines(pos, q1, q3, color="black", linewidth=5, zorder=4)
-    #     ax.scatter(pos, med, color="white", s=30, zorder=5, edgecolors="black")
+    fig, axes = plt.subplots(1, n_models, figsize=(5 * n_models, 4), sharey=True)
+    if n_models == 1:
+        axes = [axes]
 
-    # --- 坐标轴设置 ---
-    # 给顶部留一点空间，防止 100%+ 的 label 和图表边缘粘连
-    ax.set_ylim(0, wer_cap) 
-    ax.set_xticks(positions)
-    ax.set_xticklabels(names, fontsize=11, rotation=15)
-    ax.set_ylabel("Word Error Rate (WER) (%)", fontsize=12)
-    
-    # --- 核心修改：将刻度转换为百分比 ---
-    yticks = ax.get_yticks()
-    # 过滤掉超出范围的刻度
-    yticks = [t for t in yticks if 0 <= t < wer_cap]
-    # 确保包含封顶值 (wer_cap)
-    if wer_cap not in yticks:
-        yticks.append(wer_cap)
-    
-    ax.set_yticks(yticks)
-    
-    ytick_labels = []
-    for t in yticks:
-        # 将小数乘以100并转为整数（例如 0.2 -> 20）
-        pct_val = int(round(t * 100))
-        if t >= wer_cap:
-            ytick_labels.append(f"{pct_val}%+")  # 顶部显示为 100%+ (或对应的 cap)
-        else:
-            ytick_labels.append(f"{pct_val}%")
-            
-    ax.set_yticklabels(ytick_labels)
+    for mi, ax in enumerate(axes):
+        counts = binned[mi]
+        color = model_colors[mi % len(model_colors)]
+        bars = ax.bar(range(n_bins), counts, color=color, edgecolor="black", linewidth=0.2)
 
-    # 绘制封顶警戒线
-    ax.axhline(y=wer_cap, color="red", linestyle="--", linewidth=1, alpha=0.4)
-    ax.grid(True, axis="y", alpha=0.2, linestyle=':')
+        # percentage labels on top of each bar
+        total = sum(counts)
+        for bi, bar in enumerate(bars):
+            h = bar.get_height()
+            pct = h / total * 100 if total else 0
+            ax.text(bar.get_x() + bar.get_width() / 2, h + y_max * 0.01,
+                    f"{pct:.1f}%", ha="center", va="bottom", fontsize=12)
 
+        ax.set_xticks(range(n_bins))
+        ax.set_xticklabels(bin_labels, fontsize=16, rotation=24, ha="right")
+        ax.set_yticks([])
+        ax.set_ylim(0, y_max * 1.01)
+        # ax.tick_params(axis="y", which="major", labelsize=16, rotation=30)
+        ax.set_title(names[mi], fontsize=30)
+        ax.grid(True, axis="y", alpha=0.2, linestyle=":")
+
+        if mi == 0:
+            ax.set_ylabel("#Samples", fontsize=30)
+
+    # fig.suptitle(f"WER Distribution — {dataset}", fontsize=13, y=1.02)
     plt.tight_layout()
-    
+
     os.makedirs(output_dir, exist_ok=True)
-    outpath = os.path.join(output_dir, f"{dataset}_wer_violin.png")
+    outpath = os.path.join(output_dir, f"{dataset}_wer_hist_cmp.png")
     fig.savefig(outpath, dpi=300, bbox_inches="tight")
     plt.close(fig)
     return outpath

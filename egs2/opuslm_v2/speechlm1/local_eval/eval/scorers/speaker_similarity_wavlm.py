@@ -76,6 +76,9 @@ class SpeakerSimilarityWavlmScorer(BaseScorer):
         for path in tqdm(unique_paths, desc=f"{self.name} [embed]", leave=False):
             try:
                 wav = self._load_wav(path)          # (1, T)
+                if wav.shape[-1] < 16000:
+                    wav = F.pad(wav, (0, 32000 - wav.shape[-1]))  # pad to 2 second
+
                 emb = self.model(wav.to(self.device))  # (1, emb_dim)
                 embeddings[path] = emb.squeeze(0).detach().cpu()  # (emb_dim,)
             except Exception as exc:
@@ -90,7 +93,7 @@ class SpeakerSimilarityWavlmScorer(BaseScorer):
 
     @staticmethod
     def _cosine(a: torch.Tensor, b: torch.Tensor) -> float:
-        return F.cosine_similarity(a, b).item()
+        return F.cosine_similarity(a, b, dim=0).item()
 
     def run(self, samples: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         unique_paths: list[str] = []
@@ -116,8 +119,11 @@ class SpeakerSimilarityWavlmScorer(BaseScorer):
                         embeddings[sample["audio_path"]],
                         embeddings[sample["eval_audio_path"]],
                     )
-                except:
-                    sim = -1.0  # treat missing embedding as maximally dissimilar
+                except Exception as e:
+                    print(f"Failed to compute similarity for sample {sample_id}: {e}")
+                    # print(embeddings[sample["audio_path"]])
+                    # print(embeddings[sample["eval_audio_path"]])
+                    sim = 0.0  # treat missing embedding as maximally dissimilar
 
                 cos_score = (sim + 1.0) / 2  # [-1, 1] -> [0, 1]
 

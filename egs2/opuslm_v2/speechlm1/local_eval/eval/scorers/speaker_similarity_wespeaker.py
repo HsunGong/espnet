@@ -87,7 +87,7 @@ class SpeakerSimilarityWespeakerScorer(BaseScorer):
 
     @staticmethod
     def _cosine(a: torch.Tensor, b: torch.Tensor) -> float:
-        return F.cosine_similarity(a, b).item()
+        return F.cosine_similarity(a, b, dim=0).item()
 
     def run(self, samples: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         # Fail fast: KeyError if a sample is missing the required field
