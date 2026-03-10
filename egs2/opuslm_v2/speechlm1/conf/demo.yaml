@@ -1,0 +1,372 @@
+# ============================================================================
+# Bagpiper Demo Page Configuration
+# ============================================================================
+# This YAML drives the entire demo page.  Edit sections / samples here,
+# then run `python build.py` (or let GitHub Actions do it) to regenerate
+# index.html.
+#
+# Audio paths are relative to the site root (demo/).
+# Use the "audios/" prefix — put actual wav/mp3 files under demo/audios/.
+# ============================================================================
+
+# ---------- site-level metadata ----------
+title: "Bagpiper"
+subtitle: "A Universal Audio Editing Model"
+# logo: "assets/logo.png"   # optional, uncomment when ready
+
+# ---------- models to compare (column order) ----------
+models:
+  - id: source
+    name: "Source"
+    description: "Original unedited audio clip"
+    color: "#6c757d"
+    # No expdir: source audio comes from metadata.audio_path
+
+  - id: bagpiper_base
+    name: "Bagpiper-Base (TTS)"
+    description: "The audio is inferred with ONLY target CAPTION as input, by Bagpiper-Base."
+    color: "#4C72B0"
+    expdir: /mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/exp/opuslm_v2_stage2_pretrain_base/inference/inference_audio_step_350000/dialogue_eval-{task_key}-tgt2audio
+
+  - id: bagpiper_base_mt
+    name: "Bagpiper-Base"
+    description: "The audio is inferred with Multi-Turn (MT) format, by Bagpiper-Base."
+    color: "#4C72B0"
+    expdir: /mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/exp/opuslm_v2_stage2_pretrain_base/inference/inference_audio_step_350000/dialogue_eval-{task_key}-t2a_t2a
+
+  - id: bagpiper_st_353k
+    name: "Bagpiper-Edit (ST)"
+    description: "The audio is inferred with Single-Turn (ST) format, it is trained without paired audio-edit data, by Bagpiper-Edit."
+    color: "#DD8452"
+    expdir: /mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/exp/ct-mt-t2a_v2-1000k/inference/inference_audio_step_353000/dialogue_eval-{task_key}-t2a_t2a
+
+  - id: bagpiper_st_356k
+    name: "Bagpiper-Edit (ST)"
+    description: "The audio is inferred with Single-Turn (ST) format, it is trained without paired audio-edit data, by Bagpiper-Edit."
+    color: "#DD8452"
+    expdir: /mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/exp/ct-mt-t2a_v2-1000k/inference/inference_audio_step_356000/dialogue_eval-{task_key}-t2a_t2a
+
+  - id: bagpiper_st_359k
+    name: "Bagpiper-Edit (ST)"
+    description: "The audio is inferred with Single-Turn (ST) format, it is trained without paired audio-edit data, by Bagpiper-Edit."
+    color: "#DD8452"
+    expdir: /mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/exp/ct-mt-t2a_v2-1000k/inference/inference_audio_step_359000/dialogue_eval-{task_key}-t2a_t2a
+
+  - id: bagpiper_mt_353k
+    name: "Bagpiper-Edit (MT)"
+    description: "The audio is inferred with Multi-Turn (MT) format, it is trained without paired audio-edit data, by Bagpiper-Edit."
+    bold_red: true
+    color: "#55A868"
+    expdir: /mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/exp/ct-mt-t2a_v2-1000k/inference/inference_audio_step_353000/dialogue_eval-{task_key}-t2a_t2a
+
+  - id: bagpiper_mt_356k
+    name: "Bagpiper-Edit (MT)"
+    description: "The audio is inferred with Multi-Turn (MT) format, it is trained without paired audio-edit data, by Bagpiper-Edit."
+    bold_red: true
+    color: "#55A868"
+    expdir: /mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/exp/ct-mt-t2a_v2-1000k/inference/inference_audio_step_356000/dialogue_eval-{task_key}-t2a_t2a
+
+  - id: bagpiper_mt_359k
+    name: "Bagpiper-Edit (MT)"
+    description: "The audio is inferred with Multi-Turn (MT) format, it is trained without paired audio-edit data, by Bagpiper-Edit."
+    bold_red: true
+    color: "#55A868"
+    expdir: /mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/exp/ct-mt-t2a_v2-1000k/inference/inference_audio_step_359000/dialogue_eval-{task_key}-t2a_t2a
+
+  - id: cosyvoice3
+    name: "CosyVoice-3"
+    description: "The audio is inferred with CosyVoice-3, it is trained with <b>paired speech-edit</b> data, with zero-shot prompting."
+    color: "#C44E52"
+    expdir: /mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/exp/cv3/test_clean/{task_dir}
+
+  - id: stepaudiox
+    name: "Step-Audio-EditX"
+    description: "The audio is inferred with Step-Audio-EditX, it is trained with <b>paired speech-edit</b> data, and inferred with constraint parameters."
+    color: "#8172B3"
+    expdir: /mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/exp/stepaudiox/test_clean/{task_dir}
+
+  - id: audioldm2
+    name: "AudioLDM2"
+    description: "The audio is inferred with AudioLDM2, it is inferred with text prompt only."
+    color: "#8C8C8C"
+    expdir: /mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/exp/audioldm2/test_clean/{task_dir}
+
+  - id: minguniaudio
+    name: "Ming-UniAudio-Edit"
+    description: "The audio is inferred with Ming-UniAudio-Edit, it is trained with <b>paired speech-edit</b> data, and inferred with constraint prompting."
+    color: "#937860"
+    expdir: /mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/exp/minguniaudioedit/test_clean/{task_dir}
+
+  - id: bagpiper_mt_356k-v2
+    name: "Bagpiper-Edit (MT)"
+    description: "The audio is inferred with Multi-Turn (MT) format, it is trained without paired audio-edit data, by Bagpiper-Edit."
+    bold_red: true
+    color: "#55A868"
+    expdir: /mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/exp/cv3/test_clean/speech_edit-v2-fixed/{task_name}
+
+# ---------- abstract ----------
+abstract: |
+  Current text-guided audio editing methods rely on paired training data, predefined operation templates, and separate processing pipelines across speech, music, and sound.
+  We present Bagpiper-Edit to enable open-ended audio editing via free-form natural language instructions.
+  We reformulate audio editing as a rich-caption rewriting task by treating a rich caption as the semantic representation of an audio clip.
+  The user request is translated into an edited caption, which then guides Bagpiper-Edit to generate the target edited audio with the original audio as contextual acoustic anchor.
+  This unlocks the potential of free-form editing, and circumvents the need for paired audio-editing training data, enabling powerful zero-shot editing capabilities.
+  Evaluations across speech, audio, and free-form editing show Bagpiper-Edit maintains good consistency to the original audio and achieves similar performance to other expert models in most cases.
+
+# ---------- demo sections ----------
+sections:
+  # ================================================================
+  #  SPEECH EDITING
+  # ================================================================
+  - id: speech
+    title: "Speech Editing"
+    description: "Editing operations that modify the spoken content, speaking style, or emotion of a speech utterance."
+    subsections:
+
+      # --- Transcription — Deletion ---
+      - id: transcription_del
+        title: "Transcription — Deletion"
+        description: "Remove specific words or phrases from the utterance while keeping the rest natural."
+        expdir_key: test_clean-v1-transcription_del
+        metadata: /mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/test_clean/speech_edit/transcription_del.jsonl
+        samples:
+          - id: "1188-133604-0028"
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k, cosyvoice3, stepaudiox, minguniaudio]
+          - id: "1995-1826-0013"
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k, cosyvoice3, stepaudiox, minguniaudio]
+          - id: "2094-142345-0012"
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k, cosyvoice3, stepaudiox, minguniaudio]
+          - id: "2300-131720-0007"
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k, cosyvoice3, stepaudiox, minguniaudio]
+          - id: "3575-170457-0053"
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k, cosyvoice3, stepaudiox, minguniaudio]
+          - id: "3575-170457-0053"
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k, cosyvoice3, stepaudiox, minguniaudio]
+          - id: "5105-28240-0008"
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k, cosyvoice3, stepaudiox, minguniaudio]
+
+      - id: transcription_ins
+        title: "Transcription — Insertion"
+        description: "Insert new words or phrases into the existing utterance at a specified position."
+        expdir_key: test_clean-v1-transcription_ins
+        metadata: /mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/test_clean/speech_edit/transcription_ins.jsonl
+        samples:
+          - id: "1188-133604-0000"
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k, cosyvoice3, minguniaudio, stepaudiox]
+          - id: "8224-274384-0012"
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k, cosyvoice3, minguniaudio, stepaudiox]
+          - id: "1089-134686-0025"
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k, cosyvoice3, minguniaudio, stepaudiox]
+          - id: "1188-133604-0037"
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k, cosyvoice3, minguniaudio, stepaudiox]
+          - id: "121-123852-0003"
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k, cosyvoice3, minguniaudio, stepaudiox]
+          - id: "1221-135766-0003"
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k, cosyvoice3, minguniaudio, stepaudiox]
+          
+      - id: transcription_replace_sentence
+        title: "Transcription — Replace Sentence"
+        description: "Replace entire sentences or clauses while preserving surrounding context."
+        expdir_key: test_clean-v1-transcription_replace_sentence
+        metadata: /mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/test_clean/speech_edit/transcription_replace_sentence.jsonl
+        samples:
+          - id: "4077-13754-0010"
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k, cosyvoice3, minguniaudio, stepaudiox]
+          - id: "8224-274381-0002"
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k, cosyvoice3, minguniaudio, stepaudiox]
+          - id: "8224-274381-0005"
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k, cosyvoice3, minguniaudio, stepaudiox]
+          - id: "1188-133604-0002"
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k, cosyvoice3, minguniaudio, stepaudiox]
+          - id: "1284-1181-0014"
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k, cosyvoice3, minguniaudio, stepaudiox]
+          - id: "3575-170457-0043"
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k, cosyvoice3, minguniaudio, stepaudiox]
+          
+      # TODO: add emotion / style change
+      - id: style_emotion
+        title: "Emotion Editing"
+        description: "Change the emotional expression of the speaker (e.g. happy, sad, angry, fearful)."
+        expdir_key: test_clean-v2-fixed-style_emotion
+        task_name: style_emotion
+        task_base: speech_edit-v2
+        metadata: /mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/test_clean/speech_edit-v2-fixed/style_emotion.jsonl
+        samples:
+          - id: 7127-75946-0002 # superise
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k-v2, cosyvoice3, minguniaudio, stepaudiox]
+          - id: 237-134500-0018 # sad
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k-v2, cosyvoice3, minguniaudio, stepaudiox]
+          - id: 8230-279154-0027 # angry
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k-v2, cosyvoice3, minguniaudio, stepaudiox]
+          - id: 2830-3980-0054 # happy
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k-v2, cosyvoice3, minguniaudio, stepaudiox]
+
+      # --- Speaker Style Editing ---
+      - id: speaker_style
+        title: "Speaker Style Editing"
+        description: "Modify the speaking style — e.g. whisper, shout, child voice, elderly voice."
+        expdir_key: test_clean-v2-fixed-style_whisper
+        task_name: style_whisper
+        task_base: speech_edit-v2
+        metadata: /mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/test_clean/speech_edit-v2-fixed/style_whisper.jsonl
+        samples:
+          - id: 672-122797-0045 # murmur
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k-v2, cosyvoice3, minguniaudio, stepaudiox]
+          - id: 1284-1180-0018 # shy
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k-v2, cosyvoice3, minguniaudio, stepaudiox]
+          - id: 8555-292519-0006 # whisper
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k-v2, cosyvoice3, minguniaudio, stepaudiox]
+          - id: 1320-122617-0011 # girl
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k-v2, cosyvoice3, minguniaudio, stepaudiox]
+          - id: 8555-284449-0001 # old
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k-v2, cosyvoice3, minguniaudio, stepaudiox]
+          - id: 3575-170457-0019 # serious
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k-v2, cosyvoice3, minguniaudio, stepaudiox]
+          
+  # ================================================================
+  #  AUDIO EDITING
+  # ================================================================
+  - id: audio
+    title: "Audio Editing"
+    description: "Operations on the background audio layer — adding or removing music and sound effects while preserving the foreground speech."
+    subsections:
+      - id: speech_add
+        title: "Add Event"
+        description: "Add environmental sound effects (rain, traffic, birds, etc.) to a speech utterance."
+        expdir_key: test_clean_audioset-v2-speech_add_mix
+        metadata: /mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/test_clean/audio_edit-v2/speech_add_mix.jsonl
+        samples:
+          - id: "1058fb6a6a6b435b9ebf466719a05fa3"
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k, audioldm2]
+          - id: "11389b036d4b4de38b0ed99ae1a3b0fe"
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k, audioldm2]
+          - id: "253c752ee6b9494489331b5cef94e5c1"
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k, audioldm2]
+          - id: "35cdd44adb1b48aba1017f4e313a49fd"
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k, audioldm2]
+          - id: "064384013db8467fb3671ab655df3c29"
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k, audioldm2]
+          # TODO: add sound/music mix
+
+      # --- Sound Effects — Remove ---
+      - id: speech_remove
+        title: "Remove Event"
+        description: "Remove environmental sound effects while preserving the speech."
+        expdir_key: test_clean_audioset-v2-speech_remove_mix
+        metadata: /mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/test_clean/audio_edit-v2/speech_remove_mix.jsonl
+        samples:
+          - id: 143b7b1cc34548558eeae1655ee5aa60
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k, audioldm2]
+          - id: 1c027d664e8545aca17182c569cc8b24
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k, audioldm2]
+          # TODO: add sound/music mix
+
+  # ================================================================
+  #  CREATIVE EDITING
+  # ================================================================
+  - id: creative
+    title: "Creative Editing"
+    description: "Free-form creative audio editing guided by natural-language instructions."
+    subsections:
+
+      # --- Music Creative Edit ---
+      - id: music_creative
+        title: "More Creative Edit of Music"
+        description: "Creatively modify or transform music elements according to free-form instructions."
+        expdir_key: test_clean_audioset-v4-music_creative_edit
+        metadata: /mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/test_clean/freeform-edit-v2/music_creative_edit.jsonl
+        samples:
+          - id: cb0dd4dc7a5b4f78965128fb5f8506c9
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k]
+          - id: 16b3cba2eee64fd292c31e106691fae7
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k]
+          - id: 7dc65c59a5b84138b7082ef106ebdc7f
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k]
+          - id: 7aceb0ab068e4c59b0ef3d37a5c2a6c7
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k]
+          - id: 4d66604b76114ae7b8026198ed7729a2
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k]
+
+      - id: sound_creative
+        title: "More Creative Edit of Sound"
+        description: "Creatively modify or transform sound elements according to free-form instructions."
+        expdir_key: test_clean_audioset-v4-sound_creative_edit
+        metadata: /mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/test_clean/freeform-edit-v2/sound_creative_edit.jsonl
+        samples:
+          - id: 513b0198753b4ed98b46e77e180be944
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k]
+          - id: 827cff2c02a44daba4cced95d972d5c9
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k]
+          - id: ed772e33b63147a5861313f8b28650ff
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k]
+          - id: 68190fd30e84481c901c62a44f970c53
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k]
+          - id: 652e29e8423c4012a6c85828e6b3c1e4
+            models: [bagpiper_base, bagpiper_base_mt, bagpiper_st_356k, bagpiper_mt_356k]
+
+# ---------- appendix ----------
+appendix:
+  title: "Appendix"
+  content: |
+    <!-- ====== 1. Evaluation Framework ====== -->
+    <h4>1. Evaluation Framework
+      <a href="configs/eval.yaml" target="_blank" style="font-size:.75em; font-weight:normal; margin-left:.5em;">
+        &#128196; eval.yaml
+      </a>
+    </h4>
+    <p>Three independent LLM judges (Qwen3-Omni, Gemini, Caption+LLM) each receive
+    the original and edited audio clips and score on a 1&#x2013;5 scale.
+    Shared system prompt:</p>
+    <pre class="bg-light border rounded p-3" style="font-size:.82rem;">You are an expert speech audio evaluator.
+    You will receive two audio clips:
+      - Audio A = the ORIGINAL audio (before editing)
+      - Audio B = the EDITED audio (after editing)
+    Compare them carefully on multiple quality aspects.
+
+    Scoring rubric for EACH aspect (integer 1-5):
+      5 = Excellent  4 = Good  3 = Fair  2 = Poor  1 = Very Poor
+
+    Be strict, consistent, and unbiased.
+    Output ONLY valid JSON with the keys specified in the user message.</pre>
+    <p>Evaluation dimensions (<em>JSON keys</em>):</p>
+    <table class="table table-sm table-bordered" style="font-size:.88rem;">
+      <thead><tr><th>Task group</th><th>Dimensions</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Speech editing</td>
+          <td><code>consistency</code> &middot; <code>change_quality</code> &middot; <code>score</code></td>
+        </tr>
+        <tr>
+          <td>Audio / Creative editing</td>
+          <td><code>edit_fidelity</code> &middot; <code>audio_quality</code> &middot; <code>coherence</code> &middot; <code>preservation</code> &middot; <code>score</code></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ====== 2. Configuration YAMLs ====== -->
+    <h4>2. Configuration YAMLs</h4>
+
+    <h5>Training &#8212;
+      <a href="configs/train.yaml" target="_blank">conf/train_stage3_mt.yaml</a>
+    </h5>
+    <pre class="bg-light border rounded p-3" style="font-size:.82rem;">multimodal_io:
+      text:            { tokenizer_name: Qwen/Qwen3-8B-Base }
+      discrete_audio:  { codec_hf_model_tag: hf-audio/xcodec-hubert-general, delay_interleave: true }
+      continuous_audio:{ encoder_hf_model_tag: Qwen/Qwen3-Omni-30B-A3B-Instruct, dtype: bfloat16 }
+    model:    { model_hf_tag: Qwen/Qwen3-8B-Base, model_choice: parallel }
+    preprocessor: { audio_cfg: 0.05 }     # 5% condition drop for CFG
+    trainer:
+      deepspeed_config: conf/ds_acc4_tot500k.json
+      freeze_param: [multimodal_io_dict.discrete_audio, multimodal_io_dict.continuous_audio]
+      max_step: 356_000</pre>
+
+    <h5>Inference &#8212;
+      <a href="configs/infer.yaml" target="_blank">conf/inference_audio.yaml</a>
+    </h5>
+    <pre class="bg-light border rounded p-3" style="font-size:.82rem;">single_turn:
+      enforce_modality: [audio]
+      audio: { temperature: 0.8, topk: 20, cfg: 3, max_step: 2048 }
+
+    multi_turn:
+      enforce_modality: [audio]
+      audio: { temperature: 0.8, topk: 20, cfg: 3, max_step: 2048 }</pre>

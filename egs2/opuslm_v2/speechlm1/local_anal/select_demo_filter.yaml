@@ -1,0 +1,143 @@
+# ============================================================================
+# Demo sample selection filter config
+# ============================================================================
+# Each top-level key = dataset type (matching .results file stems).
+# Under each dataset, specify metric filters as:
+#   <metric_key>: "<lambda expression>"
+# where the lambda takes a single float value (the score) and returns bool.
+#
+# Supported metric keys:
+#   - Direct scores: asr_wer, pseudo_mos, speaker_similarity_wavlm, ...
+#   - Extra sub-fields: asr_wer.edit_acc, pseudo_mos.utmos, pseudo_mos.dns_overall,
+#                        speaker_similarity_wavlm.sim, llm_judge_openai.score, ...
+#   - LLM judge sub-fields: llm_judge_openai.change_quality, llm_judge_gemini.score, ...
+#   - CLAP / FLAM: clap_similarity.audio_sim, audio_event_flam.audio_sim, ...
+#   - Task-specific: speed_duration, volume_loudness, pitch_shift, fad, emotion_modelscope
+#
+# A sample is selected only if ALL filters for its dataset pass.
+# Invalid / missing metric values cause the sample to be skipped.
+# ============================================================================
+
+# ============================================================================
+# Transcription edits  (speech-edit, metadata in data/test_clean/speech_edit/)
+# Metrics: asr_wer, asr_wer.edit_acc, pseudo_mos.utmos, speaker_similarity_wavlm.sim
+# ============================================================================
+transcription_ins:
+  asr_wer: "lambda x: x < 0.1"              # avg ~0.36, filter top tier
+  asr_wer.edit_acc: "lambda x: x > 0.7"     # edit accuracy > 50%
+  speaker_similarity_wavlm.sim: "lambda x: x > 0.8"
+  pseudo_mos.dns_overall: "lambda x: x > 3.0"
+
+transcription_del:
+  asr_wer: "lambda x: x < 0.1"
+  asr_wer.edit_acc: "lambda x: x > 0.7"
+  speaker_similarity_wavlm.sim: "lambda x: x > 0.8"
+  pseudo_mos.dns_overall: "lambda x: x > 3.0"
+
+transcription_sub:
+  asr_wer: "lambda x: x < 0.1"
+  asr_wer.edit_acc: "lambda x: x > 0.7"
+  speaker_similarity_wavlm.sim: "lambda x: x > 0.8"
+  pseudo_mos.dns_overall: "lambda x: x > 3.0"
+
+transcription_replace_sentence:
+  asr_wer: "lambda x: x < 0.1"
+  speaker_similarity_wavlm.sim: "lambda x: x > 0.8"
+  pseudo_mos.dns_overall: "lambda x: x > 3.0"
+
+# ============================================================================
+# Paralinguistic insertion  (metadata in data/test_clean/speech_edit/)
+# Metrics: asr_wer, pseudo_mos.utmos, llm_judge_openai.change_quality
+# ============================================================================
+transcription_add_paralinguistic:
+  asr_wer: "lambda x: x < 0.2"
+  pseudo_mos.dns_overall: "lambda x: x > 3.0"     # avg ~3.6, filter low quality
+  # llm_judge_openai.change_quality: "lambda x: x > 3.0"  # change quality ≥3
+
+# ============================================================================
+# Style edits  (metadata in data/test_clean/speech_edit/)
+# Metrics: asr_wer, pseudo_mos.utmos, speaker_similarity_wavlm.sim,
+#          llm_judge_openai.change_quality, emotion_modelscope
+# ============================================================================
+style_emotion:
+  # asr_wer: "lambda x: x < 0.01"
+  emotion_modelscope: "lambda x: x == 1.0"
+  speaker_similarity_wavlm.sim: "lambda x: x < 0.8"
+  pseudo_mos.dns_overall: "lambda x: x > 3.2"
+  # llm_judge_openai: "lambda x: x >= 3.0"
+
+style_whisper:
+  # asr_wer: "lambda x: x < 0.01"
+  speaker_similarity_wavlm.sim: "lambda x: x < 0.8"
+  pseudo_mos.dns_overall: "lambda x: x > 2.5"
+  llm_judge_openai: "lambda x: x >= 3.0"
+
+# ============================================================================
+# Audio effects  (metadata in data/test_clean/speech_edit/)
+# Metrics vary: asr_wer, pseudo_mos.utmos, speaker_similarity_wavlm.sim,
+#               speed_duration, volume_loudness, pitch_shift
+# ============================================================================
+audio_effect_speed: {}
+  # speaker_similarity_wavlm.sim: "lambda x: x > 0.55"   # avg ~0.51
+  # pseudo_mos.dns_overall: "lambda x: x > 3.0"
+  # speed_duration: "lambda x: x < 0.30"      # duration accuracy within 30%
+
+audio_effect_pitch:
+  speaker_similarity_wavlm.sim: "lambda x: x > 0.20"   # avg ~0.25, tight range
+  pseudo_mos.dns_overall: "lambda x: x > 3.0"
+  pitch_shift: "lambda x: x < 0.30"         # pitch error within 30%
+
+audio_effect_volume:
+  speaker_similarity_wavlm.sim: "lambda x: x > 0.55"
+  pseudo_mos.dns_overall: "lambda x: x > 3.0"
+  volume_loudness: "lambda x: x < 0.40"     # loudness accuracy within 40%
+
+audio_effect_reverb:
+  pseudo_mos.dns_overall: "lambda x: x > 2.0"
+  llm_judge_openai.change_quality: "lambda x: x > 2.5"
+
+audio_effect_dereverb:
+  speaker_similarity_wavlm.sim: "lambda x: x > 0.55"
+  pseudo_mos.dns_overall: "lambda x: x > 3.0"
+
+speech_add_mix:
+  clap_similarity.audio_sim: "lambda x: x > 0.40"
+speech_remove_mix:
+  clap_similarity.audio_sim: "lambda x: x > 0.40"
+speech_replace_mix:
+  clap_similarity.audio_sim: "lambda x: x > 0.15"
+sound_add_mix:
+  clap_similarity.audio_sim: "lambda x: x > 0.35"
+  # metadata.y.main_type: "lambda x: x != 'sound'"   # exclude music samples
+sound_remove_mix:
+  clap_similarity.audio_sim: "lambda x: x > 0.35"
+  # metadata.y.main_type: "lambda x: x != 'sound'"   # exclude music samples
+sound_replace_mix:
+  clap_similarity.audio_sim: "lambda x: x > 0.10"   # avg ~0.16
+music_add_mix:
+  clap_similarity.audio_sim: "lambda x: x > 0.40"
+music_remove_mix:
+  clap_similarity.audio_sim: "lambda x: x > 0.40"
+music_replace_mix:
+  clap_similarity.audio_sim: "lambda x: x > 0.20"   # avg ~0.27
+
+# ============================================================================
+# Creative edits  (metadata in data/test_clean/freeform-edit/)
+# Metrics: fad, llm_judge_openai.change_quality, llm_judge_gemini (1-5 scale)
+# ============================================================================
+speech_creative_edit: {}
+  # llm_judge_openai.change_quality: "lambda x: x > 2.5"
+  # llm_judge_gemini: "lambda x: x > 4.0"
+  # llm_judge_openai: "lambda x: x > 4.0"
+
+sound_creative_edit: {}
+  # llm_judge_gemini: "lambda x: x > 4.0"
+  # llm_judge_openai: "lambda x: x > 4.0"
+
+music_creative_edit: {}
+  # llm_judge_gemini: "lambda x: x > 4.0"
+  # llm_judge_openai: "lambda x: x > 4.0"
+
+sing_creative_edit: {}
+  # llm_judge_gemini: "lambda x: x > 4.0"
+  # llm_judge_openai: "lambda x: x > 4.0"

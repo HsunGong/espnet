@@ -129,6 +129,16 @@ for i in data/test_clean/freeform-edit/*.jsonl; do
     --mode cat2split1 t2a_t2a a2t_t2a tgt2audio
 done
 
+rm data/test_clean/freeform-edit-v2/dialogues/data.yaml
+for i in data/test_clean/freeform-edit-v2/*.jsonl; do
+  python local_eval/non_speech/assemble_dialogue.py \
+    -i "$i" \
+    --yaml-path data/test_clean/freeform-edit-v2/dialogues/data.yaml \
+    --name-prefix eval-test_clean_audioset-v4 \
+    -o data/test_clean/freeform-edit-v2/dialogues \
+    --mode cat2split1 t2a_t2a tgt2audio
+done
+
 yq 'keys[]' data/test_clean/freeform-edit/dialogues/data.yaml
 
 for dir in exp/*/inference/*; do python3 local_eval/convert_results.py --exp-inference-dir $dir --name-prefix eval-test_clean_audioset-v3 --metadata-dir data/test_clean/freeform-edit ; done
@@ -152,3 +162,29 @@ python local_eval/eval_parallel.py --gpus 0,1,2,3,4,5,6,7 --max-workers-per-gpu 
 python local_eval/eval_parallel.py --gpus 4,5,6,7 --max-workers-per-gpu 2 --config local_eval/eval/eval.yaml --metadata data/test_clean/speech_edit --data-dirs $dir/eval-test_clean-v1-t2a_t2a
 python local_eval/eval_parallel.py --gpus 4,5,6,7 --max-workers-per-gpu 2 --config local_eval/eval/eval.yaml --metadata data/test_clean/audio_edit-v2 --data-dirs $dir/eval-test_clean_audioset-v2-t2a_t2a
 python local_eval/eval_parallel.py --gpus 4,5,6,7 --max-workers-per-gpu 2 --config local_eval/eval/eval.yaml --metadata data/test_clean/freeform-edit --data-dirs $dir/eval-test_clean_audioset-v3-t2a_t2a
+
+# region: part3
+rm data/test_clean/speech_edit-v2/dialogues/data.yaml
+for i in data/test_clean/speech_edit-v2/*.jsonl; do
+    python local_eval/non_speech/assemble_dialogue.py \
+        -i "$i" \
+        --yaml-path data/test_clean/speech_edit-v2/dialogues/data.yaml \
+        --name-prefix eval-test_clean-v2 \
+        -o data/test_clean/speech_edit-v2/dialogues \
+        --mode cat2split1 t2a_t2a a2t_t2a tgt2audio
+done
+
+data/test_clean/speech_edit-v2-fixed
+rm data/test_clean/speech_edit-v2-fixed/dialogues/data.yaml
+for i in data/test_clean/speech_edit-v2-fixed/*.jsonl; do
+    python local_eval/non_speech/assemble_dialogue.py \
+        -i "$i" \
+        --yaml-path data/test_clean/speech_edit-v2-fixed/dialogues/data.yaml \
+        --name-prefix eval-test_clean-v2-fixed \
+        -o data/test_clean/speech_edit-v2-fixed/dialogues \
+        --mode cat2split1 t2a_t2a a2t_t2a tgt2audio
+done
+
+
+for dir in exp/*/inference/*; do python3 local_eval/convert_results.py --exp-inference-dir $dir --name-prefix eval-test_clean-v2 --metadata-dir data/test_clean/speech_edit-v2; done
+# endregion

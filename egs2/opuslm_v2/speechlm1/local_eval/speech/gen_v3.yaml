@@ -1,0 +1,134 @@
+# set global MAX_DURATION
+vllm:
+  url: "http://cnode1-006:8000/v1"
+  model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+  max_tokens: 4096
+  temperature: 0.7
+
+captioner:
+  url: "http://cnode1-004:8000/v1,http://cnode1-004:8001/v1,http://cnode1-004:8002/v1,http://cnode1-004:8004/v1"
+  model: "Qwen/Qwen3-Omni-30B-A3B-Captioner"
+
+judge:
+  url: "http://cnode1-006:8000/v1"
+  model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+  max_tokens: 4096
+  temperature: 0.2
+
+style_whisper:
+  styles: ['serious', 'child', 'older', 'girl', 'whisper', 'warm', 'shy', 'murmur']
+
+  system_prompt: |-
+    You are an expert audio transcription and vocal delivery editor.
+
+    TASK:
+    1. Generate an editing prompt to change the speaking style (with a given style tag).
+    - The writing style is always like `change the speaking style to (a child voice, a whisper style, ...)`, the style tag is the ONLY thing you can change
+    2. Update the caption by ONLY modifying the speaking style description.
+    - STRICTLY follow the original caption's format, structure, and level of detail.
+    - You MUST preserve ALL existing descriptions in the original caption (including transcription content, background sounds, speaker identity, etc.).
+    - ONLY modify the part that describes the speaking style / delivery method to reflect the new style, try to be consistent with the original tone.
+    - For example, if the caption contiains: `The speaker’s delivery is formal and neutral, with precise enunciation and a steady rhythm, reflecting the style of a prepared reading or narration.` you should change it to `The speaker’s delivery is in a shy tone, with soft enunciation and a hesitant rhythm, reflecting the style of a timid whisper.` rather than keep it. **ALWAYS change all possible components that reflect the new style**
+    - Do NOT mention "editing tags" or technical operations such as "change to a tone ...", say like it is naturally `whispering`.
+    - Do not change any transcription text. But keep all the transcription content.
+
+    OUTPUT:
+    Return ONLY valid JSON with exactly these keys:
+    {
+      "edit_prompt": "...",
+      "new_caption": "..."
+    }
+
+  user_prompt: |-
+    ## Original Transcription:
+    {{ text }}
+
+    ## Original Audio Caption:
+    {{ audio_caption }}
+
+    ## Instruction
+    Apply the vocal style "{{ style }}" to the audio.
+
+  judge_system_prompt: |-
+    You are an expert evaluator for audio-text styling.
+
+    You MUST verify FOUR things:
+    (A) Edit Prompt Alignment: The edit prompt should be compatible with the new vocal style.
+    (B) New Caption Alignment: The modified caption should be compatible with the new vocal style.
+    (C) Caption Format Preservation: The modified caption MUST retain the same format and structure as the original caption. All existing descriptions (especially transcription content descriptions) must be preserved — only the speaking style part should be changed. Nothing else should be deleted or rephrased.
+    (D) Caption Writing Rules: (1) describes the new vocal delivery (e.g., "spoken in a shy tone") rather than the tag itself, and (2) maintains the structural integrity of the original caption.
+
+    Return ONLY valid JSON:
+    {"valid": true/false, "reason": "Concrete explanation of style appropriateness and caption alignment."}
+
+  judge_user_prompt: |-
+    ## Original Audio Caption:
+    {{ original_caption }}
+
+    ## Style Applied:
+    {{ style }}
+
+    ## Edit Prompt:
+    {{ edit_operation }}
+
+    ## Modified Audio Caption:
+    {{ new_caption }}
+
+style_emotion:
+  emotions: ['happy', 'angry', 'sad', 'surprised']
+
+  system_prompt: |-
+    You are an expert audio transcription and vocal delivery editor.
+
+    TASK:
+    1. Generate an editing prompt to change the speaking emotion (with a given emotion tag).
+    - The writing style is always `change the emotion to (sad/fear ...) mood`, the emotion tag is the ONLY thing you can change
+    2. Update the caption by ONLY modifying the speaker's tone/emotion description.
+    - STRICTLY follow the original caption's format, structure, and level of detail.
+    - You MUST preserve ALL existing descriptions in the original caption (including transcription content, background sounds, speaker identity, etc.).
+    - ONLY modify the part that describes the speaker's tone or emotion to reflect the new emotion, try to describe them more dramatically so that to match the new emotion.
+    - For example, "a woman with a clear, mature, and slightly raspy voice—indicative of a middle-aged or older adult—begins reading aloud in a formal, narrative tone." should be changed into (with a angry voice) "a woman with a clear, mature, and slightly raspy voice—indicative of a middle-aged or older adult—begins reading aloud in an angry, confrontational tone.", rather than keeping it. **ALWAYS change all possible components that reflect the new emotion**
+    - Do NOT mention "editing tags" or technical operations like `change`.
+    - Do not change any transcription text.
+
+    OUTPUT:
+    Return ONLY valid JSON with exactly these keys:
+    {
+      "edit_prompt": "...",
+      "new_caption": "..."
+    }
+
+  user_prompt: |-
+    ## Original Transcription:
+    {{ text }}
+
+    ## Original Audio Caption:
+    {{ audio_caption }}
+
+    ## Instruction
+    Apply the new emotion "{{ style }}" to the audio.
+
+  judge_system_prompt: |-
+    You are an expert evaluator for audio-text styling.
+
+    You MUST verify FOUR things:
+    (A) Edit Prompt Alignment: The edit prompt should be compatible with the new emotion.
+    (B) New Caption Alignment: The modified caption should be compatible with the new emotion.
+    (C) Caption Format Preservation: The modified caption MUST retain the same format and structure as the original caption. All existing descriptions (especially transcription content descriptions) must be preserved — only the speaker's tone/emotion part should be changed. Nothing else should be deleted or rephrased.
+    (D) Caption Writing Rules: (1) describes the new vocal delivery (e.g., "spoken in a sad tone") rather than the tag itself, and (2) maintains the structural integrity of the original caption.
+
+    Return ONLY valid JSON:
+    {"valid": true/false, "reason": "Concrete explanation of emotion appropriateness and caption alignment."}
+
+  judge_user_prompt: |-
+    ## Original Audio Caption:
+    {{ original_caption }}
+
+    ## New Emotion Applied:
+    {{ style }}
+
+    ## Edit Prompt:
+    {{ edit_operation }}
+
+    ## Modified Audio Caption:
+    {{ new_caption }}

@@ -27,7 +27,7 @@ _llm_judge_system_prompt: &llm_judge_sys |-
 # ============================================================================
 scorers:
   asr_wer:
-    # resume: false
+    resume: false
     model_name: openai/whisper-large-v3
     batch_size: 24
     language: en
@@ -53,7 +53,7 @@ scorers:
   llm_judge_openai:
     # resume: false
     model:
-      base_url: "http://cnode1-006:8000/v1"
+      base_url: "http://cnode1-002:8000/v1"
       model: "Qwen/Qwen3-Omni-30B-A3B-Thinking"
     batch_size: 256
     max_samples: 10000

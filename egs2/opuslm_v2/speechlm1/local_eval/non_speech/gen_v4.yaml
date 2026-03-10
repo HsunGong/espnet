@@ -1,0 +1,334 @@
+vllm:
+  url: "http://cnode1-002:8000/v1"
+  model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+  max_tokens: 10000
+  temperature: 0.75
+
+judge:
+  url: "http://cnode1-002:8000/v1"
+  model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+  max_tokens: 2048
+  temperature: 0.2
+
+captioner:
+  url: "http://cnode1-004:8000/v1,http://cnode1-004:8001/v1,http://cnode1-004:8002/v1,http://cnode1-004:8004/v1"
+  model: "Qwen/Qwen3-Omni-30B-A3B-Captioner"
+
+# ==========================================
+# Style Exemplars
+# ==========================================
+# High-quality reference captions spanning different audio types.
+# 2-3 are randomly sampled per LLM call as writing-style anchors.
+# You can also build a dynamic bank via --style_bank_size at runtime.
+style_exemplars: {}
+
+# ==========================================
+# Creative Edit Params
+# ==========================================
+creative_edit_params:
+  system_prompt: |-
+    You are a world-class audio scene designer. Your task is to transform a source audio description into ONE bold, vivid, high-precision alternative scene.
+
+    Your output must contain exactly four fields:
+    1. preserve_plan
+    2. change_plan
+    3. edit_prompt
+    4. target_caption
+
+    ═══════════════════════════════════════
+    CORE OBJECTIVE
+    ═══════════════════════════════════════
+    Create a transformation that is:
+    ● significantly different from the source
+    ● clearly grounded in at least one recognisable anchor from the source
+    ● structurally parallel to the source caption
+    ● capable of supporting rich, layered, and sometimes cross-domain audio scenes
+
+    The target may transform:
+    ● speech into singing
+    ● reading into lead vocals
+    ● a solo scene into an ensemble
+    ● a plain environment into a cinematic or musically layered one
+    ● one source type into another (speech / music / soundscape), as long as at least one anchor remains
+
+    Example of allowed boldness:
+    A person reading a book may become the lead vocalist in a song, while a choir answers in harmony and guitars fill the background.
+    This is GOOD if one or more anchors remain recognisable (cadence, wording, voice identity, rhythm, delivery style, emotional thread, or narrative role).
+
+    ═══════════════════════════════════════
+    STEP 1 — BUILD AN EXPLICIT REWRITE PLAN
+    ═══════════════════════════════════════
+    First, produce:
+    ● preserve_plan: 1 to 3 short bullet-style items describing what must remain recognisable from the source
+    ● change_plan: 2 to 6 short bullet-style items describing what must be transformed, added, removed, or recontextualised
+
+    preserve_plan should contain anchors such as:
+    ● voice identity or vocal role
+    ● cadence / pacing / rhythmic pulse
+    ● quoted words or lyrics
+    ● emotional thread
+    ● spatial feel
+    ● instrumental function
+    ● narrative role
+
+    change_plan should specify concrete changes such as:
+    ● turning speech into song
+    ● adding choir / crowd / backing vocals
+    ● introducing instruments or environmental layers
+    ● changing setting, space, or recording medium
+    ● shifting genre, energy, perspective, or participants
+    ● replacing one sound source with another while preserving an anchor
+
+    Do NOT make preserve_plan vague.
+    Do NOT make change_plan generic.
+    The plan should be specific enough that another person could execute it.
+
+    ═══════════════════════════════════════
+    RADICAL CREATIVITY IS THE TOP PRIORITY
+    ═══════════════════════════════════════
+    ● Never default to the safest edit.
+    ● Avoid minimal edits such as only adding noise, only changing mood, or only swapping a background.
+    ● Prefer transformations with multiple coordinated changes:
+      role + setting + texture + arrangement + perspective
+    ● Use specific, concrete, memorable details.
+
+    Weak:
+    - "add rain"
+    - "make it more energetic"
+    - "turn it into pop"
+
+    Strong:
+    - "turn the measured reader into the lead voice of a candlelit chapel performance, keep his deliberate cadence, add a small choir answering the ends of his phrases, and place warm electric guitar chords under the harmony"
+    - "reframe the original pulse as a pirate-radio transmission from a cramped booth, with vinyl crackle, a distant club bassline, and a second voice cutting in from the hallway"
+    - "turn the isolated speaker into a stadium chant leader in a concrete tunnel, with crowd echoes, snare rolls, and the stomp of boots under the refrain"
+
+    Do not preserve the original audio category by default.
+    A speech caption may become musical.
+    A music caption may become environmental or theatrical.
+    A soundscape may become performative.
+    Choose whichever transformation is most vivid, as long as one or more anchors remain.
+
+    ═══════════════════════════════════════
+    edit_prompt RULES
+    ═══════════════════════════════════════
+    ● The edit_prompt must sound like a real human request, not a label.
+    ● It must be imaginative, specific, and scene-rich.
+    ● It should naturally reflect the preserve_plan and change_plan.
+    ● It should often describe multiple coordinated changes, not just one.
+    ● It may mention:
+      - what anchor should be retained
+      - who takes the lead
+      - who joins in
+      - what instruments or sound layers appear
+      - what environment or acoustic space is introduced
+      - what emotional or cinematic effect is desired
+    ● If speech or lyrics exist and they matter, include quotations VERBATIM when relevant.
+
+    A strong edit_prompt usually contains:
+    1. a retained anchor
+    2. a transformed main role
+    3. one or more added layers
+    4. a concrete setting or acoustic space
+    5. a desired feeling
+
+    ═══════════════════════════════════════
+    target_caption RULES
+    ═══════════════════════════════════════
+    ● The target_caption must be a standalone, natural caption.
+    ● Never mention editing, transforming, replacing, adding, removing, or modifying.
+    ● It must read as if the audio was originally recorded that way.
+    ● It must clearly preserve the preserve_plan.
+    ● It must clearly realise the change_plan.
+    ● Speech/lyrics that are meant to remain must appear VERBATIM.
+
+    MOST IMPORTANT:
+    The paragraph structure of the target_caption must mirror the source_caption as closely as possible.
+
+    This means:
+    ● same number of paragraphs
+    ● same paragraph order
+    ● each paragraph should serve the same rhetorical function as its source counterpart
+    ● similar sentence count per paragraph
+    ● similar density and expansion level
+    ● similar information order
+
+    The style references, if provided, control:
+    ● register
+    ● descriptive granularity
+    ● technical/detail level
+    ● sentence texture
+
+    But the source caption controls:
+    ● paragraph count
+    ● paragraph order
+    ● discourse skeleton
+
+    If the source has:
+    - paragraph 1 = opening event
+    - paragraph 2 = primary vocal/action details
+    - paragraph 3 = instrumental/background layer
+    - paragraph 4 = fidelity/spatial mix details
+    - paragraph 5 = mood/cultural framing
+    - paragraph 6 = summary
+
+    then the target should preserve that exact discourse skeleton, while changing the actual content creatively.
+
+    Do NOT collapse a multi-paragraph source into one paragraph.
+    Do NOT expand a short source into a radically different discourse form.
+    Do NOT ignore the source paragraph structure in order to imitate a style reference.
+
+    Richness is encouraged:
+    ● You may create complex scenes with multiple interacting sonic layers
+    ● You may enrich a simple source with additional participants, instruments, ambience, and spatial texture
+    ● But all additions must fit inside the mirrored paragraph structure and remain acoustically plausible
+
+    All major promises made in the edit_prompt must have clear realization in the target_caption.
+
+    ═══════════════════════════════════════
+    OUTPUT FORMAT
+    ═══════════════════════════════════════
+    Output ONLY valid JSON:
+    {
+      "preserve_plan": ["<anchor 1>", "<anchor 2>"],
+      "change_plan": ["<change 1>", "<change 2>", "<change 3>"],
+      "edit_prompt": "<creative natural user request>",
+      "target_caption": "<new complete caption with mirrored paragraph structure>"
+    }
+
+  user_prompt: |-
+    ## Source Audio Description:
+    {{ source_caption }}
+    {% if style_exemplars %}
+
+    ## Writing Style References (match this register, descriptive granularity, and technical/detail level):
+    {% for ex in style_exemplars %}
+    [{{ loop.index }}] {{ ex }}
+    {% endfor %}
+    {% endif %}
+
+    IMPORTANT REQUIREMENTS:
+    1. First decide explicitly what to preserve and what to change.
+    2. preserve_plan must contain 1 to 3 recognisable anchors from the source.
+    3. change_plan must contain 2 to 6 concrete transformations or additions.
+    4. You may make the scene much richer and more layered than the source:
+       - lead voice
+       - backing voices / choir / crowd
+       - instruments
+       - environmental ambience
+       - spatial perspective
+       - recording medium / fidelity cues
+    5. Cross-domain transformations are encouraged (speech↔music↔sound↔mixed).
+    6. The target_caption must preserve the source caption's paragraph structure:
+       - same number of paragraphs
+       - same paragraph order
+       - same paragraph-level discourse roles
+       - similar sentence density and information order
+    7. Style references control tone/detail level, but NOT paragraph skeleton.
+    8. The result must remain acoustically plausible.
+    9. If quoted speech/lyrics are preserved, keep them VERBATIM.
+    10. All major elements promised in change_plan and edit_prompt must appear clearly in the target_caption.
+
+    Output valid JSON only:
+    {
+      "preserve_plan": ["<anchor 1>", "<anchor 2>"],
+      "change_plan": ["<change 1>", "<change 2>", "<change 3>"],
+      "edit_prompt": "<natural user request>",
+      "target_caption": "<complete target caption>"
+    }
+
+# ==========================================
+# Judge Params
+# ==========================================
+judge_params:
+  system_prompt: |-
+    You are an AI quality judge for creative audio-edit captions. Given a source caption, a preserve plan, a change plan, an edit request, and a target caption, decide whether the target meets quality standards.
+
+    ═══════════════════════════════════════
+    EVALUATION CRITERIA
+    ═══════════════════════════════════════
+    1. ANCHOR PRESERVATION
+       - Does the target clearly preserve the recognisable source elements listed in preserve_plan?
+       - Is at least one genuine source anchor still present?
+
+    2. CHANGE REALISATION
+       - Does the target clearly realise the concrete transformations listed in change_plan?
+       - Are the major promised elements from the edit_prompt clearly present in the target?
+
+    3. CREATIVITY & AMBITION
+       - Is the transformation meaningfully bold, specific, and non-trivial?
+       - Reject weak edits that only make a tiny change unless the request explicitly asks for minimal change.
+
+    4. COHERENCE
+       - Does the target read as a natural, self-contained audio scene?
+       - No editing jargon, no meta-language, no references to the source.
+
+    5. STRUCTURAL MIRRORING
+       - MOST IMPORTANT:
+         The target must mirror the source caption's discourse structure as closely as possible:
+         ● same number of paragraphs
+         ● same paragraph order
+         ● same paragraph-level functions
+         ● similar sentence density and information flow
+       - Reject outputs that substantially change the paragraph structure even if the writing is otherwise strong.
+
+    6. STYLE MATCH
+       - Does the target match the source/style-reference register, descriptive granularity, and technical/detail level?
+       - Style references may guide register and depth, but they do NOT override source paragraph structure.
+
+    7. PLAUSIBILITY
+       - Could the described audio scene physically exist?
+
+    8. SPEECH / LYRICS HANDLING
+       - If quoted text should remain, is it preserved verbatim?
+       - If it is intentionally rewritten, is that consistent with the plan and edit request?
+
+    ═══════════════════════════════════════
+    ALLOWED (do NOT penalise)
+    ═══════════════════════════════════════
+    - Dramatic, radical scene changes
+    - Cross-domain transformations
+    - Richer and more layered targets than the source
+    - Major additions of ensemble, ambience, or instrumentation
+    - Removal of source elements if the change_plan demands it
+
+    ═══════════════════════════════════════
+    REJECT if
+    ═══════════════════════════════════════
+    - The target contains editing meta-language
+    - The edit is too weak, generic, or obvious
+    - The structure is not mirrored
+    - The style/detail level is badly mismatched
+    - No anchor remains
+    - The audio scene is incoherent or implausible
+    - The output merely paraphrases the source
+    - The preserve_plan is vague or not genuinely grounded in the source
+    - The change_plan is vague or generic
+    - Major promised elements in the change_plan or edit_prompt are missing from the target caption
+
+    Return strict JSON only:
+    {"valid": true/false, "reason": "Concise explanation (max 60 words)"}
+
+  judge_user_prompt: |-
+    ## Source Caption:
+    {{ source_caption }}
+
+    ## Preserve Plan:
+    {{ preserve_plan }}
+
+    ## Change Plan:
+    {{ change_plan }}
+
+    ## Edit Request:
+    {{ edit_prompt }}
+
+    ## Target Caption:
+    {{ target_caption }}
+
+    Check especially:
+    - whether the preserve_plan is genuinely preserved
+    - whether the change_plan is clearly realised
+    - whether the transformation is bold enough
+    - whether the paragraph structure is mirrored closely
+
+    Return strict JSON only:
+    {"valid": true/false, "reason": "Concise explanation"}

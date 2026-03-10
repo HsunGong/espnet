@@ -294,7 +294,7 @@ def creative_edit_and_caption(llm, sys_p: str, usr_p: str, **kwargs):
     )
     if resp is None:
         raise RuntimeError("LLM returned None")
-    return resp["edit_type"], resp["edit_prompt"], resp["target_caption"]
+    return resp
 
 
 def judge_edit(judge, sys_p: str, usr_p: str, **kwargs):
@@ -353,17 +353,14 @@ def process_single_sample(
 
             # 4. LLM: creative edit + target caption (single call)
             #    Random subset of edit types per call → forces diversity
-            edit_type, edit_prompt, target_caption = creative_edit_and_caption(
+            resp = creative_edit_and_caption(
                 llm,
                 cfg["creative_edit_params"]["system_prompt"],
                 cfg["creative_edit_params"]["user_prompt"],
                 source_caption=source_caption,
                 style_exemplars=exemplars,
-                edit_types=format_edit_types(cfg["edit_type_pool"], n_sample=8),
+                edit_types=format_edit_types(cfg.get("edit_type_pool", []), n_sample=8),
             )
-
-            if not target_caption or len(target_caption.strip()) < 10:
-                raise ValueError("Target caption too short")
 
             # 5. Judge
             is_valid, reason = judge_edit(
@@ -371,8 +368,8 @@ def process_single_sample(
                 cfg["judge_params"]["system_prompt"],
                 cfg["judge_params"]["judge_user_prompt"],
                 source_caption=source_caption,
-                edit_prompt=edit_prompt,
-                target_caption=target_caption,
+                edit_prompt=resp["edit_prompt"],
+                target_caption=resp["target_caption"],
             )
 
             if not is_valid:
@@ -393,10 +390,10 @@ def process_single_sample(
                 "audio_type": main_type,
                 "audio_path": audio_path,
                 "audio_caption": source_caption,
-                "target_audio_caption": target_caption,
-                "edit_type": edit_type,
-                "edit_prompt": edit_prompt,
+                "target_audio_caption": resp.pop("target_caption", ""),
+                "edit_prompt": resp.pop("edit_prompt", ""),
                 "judge_reason": reason,
+                **resp,
             }
 
         except Exception as e:

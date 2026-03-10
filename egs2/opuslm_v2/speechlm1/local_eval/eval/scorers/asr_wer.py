@@ -36,7 +36,7 @@ def _load_audio(path: str, target_sr: int = 16_000) -> np.ndarray:
 
 
 class ASRWERScorer(BaseScorer):
-    score_keys = ["wer", "edit_acc", "hits", "substitutions", "deletions", "insertions"]
+    score_keys = ["score", "wer", "edit_acc", "hits", "substitutions", "deletions", "insertions"]
 
     def __init__(
         self,
@@ -200,7 +200,7 @@ class ASRWERScorer(BaseScorer):
                     sample_id=sample_id,
                     score=wer_value,
                     valid=True,
-                    reason=f"WER={wer_value:.2f}% C={C} S={S} D={D} I={I}",
+                    reason=f"WER={wer_value*100:.2f}% C={C} S={S} D={D} I={I}",
                     extra={
                         "wer": wer_value,
                         "hits": C,
@@ -229,11 +229,11 @@ class ASRWERScorer(BaseScorer):
 
         # recompute wer (S + D + I) / (H + S + D)
         try:
-            summary["submetric_avg"]["wer"] = 100 * (summary["submetric_avg"]["substitutions"] + summary["submetric_avg"]["deletions"] + summary["submetric_avg"]["insertions"]) / (summary["submetric_avg"]["hits"] + summary["submetric_avg"]["substitutions"] + summary["submetric_avg"]["deletions"])
+            summary["submetric_avg"]["wer_percent"] = 100 * (summary["submetric_avg"]["substitutions"] + summary["submetric_avg"]["deletions"] + summary["submetric_avg"]["insertions"]) / (summary["submetric_avg"]["hits"] + summary["submetric_avg"]["substitutions"] + summary["submetric_avg"]["deletions"])
         except:
-            summary["submetric_avg"]["wer"] = "N/A (no samples)"
-    
-        summary["avg_wer"] = summary["submetric_avg"]["wer"]
+            summary["submetric_avg"]["wer_percent"] = "N/A (no samples)"
+
+        # summary["avg_wer_percent"] = summary["submetric_avg"]["wer"]
         summary["avg_edit_acc"] = summary["submetric_avg"]["edit_acc"] / len(scored_rows) if scored_rows else "N/A"
         summary["submetric_avg"]["edit_acc"] = str(summary["avg_edit_acc"] * 100) + "%"
         return rows, summary

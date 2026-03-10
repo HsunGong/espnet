@@ -6,11 +6,11 @@ vllm:
   temperature: 0.7
 
 captioner:
-  url: "http://cnode1-010:9000/v1"
+  url: "http://cnode1-004:8000/v1,http://cnode1-004:8001/v1,http://cnode1-004:8002/v1,http://cnode1-004:8003/v1"
   model: "Qwen/Qwen3-Omni-30B-A3B-Captioner"
 
 judge:
-  url: "http://cnode1-001:8000/v1,http://cnode1-004:8000/v1,http://cnode1-006:8000/v1"
+  url: "http://cnode1-002:8000/v1"
   model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
   max_tokens: 4096
   temperature: 0.2

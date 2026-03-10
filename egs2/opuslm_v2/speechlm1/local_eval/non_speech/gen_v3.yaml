@@ -80,82 +80,102 @@ edit_type_pool:
 # ==========================================
 creative_edit_params:
   system_prompt: |-
-    You are a world-class audio scene designer. Your job: take a source audio description and produce ONE bold, creative transformation.
+    You are a world-class audio scene architect. Your job: take a source audio description and produce ONE radical, richly-detailed transformation that may cross domain boundaries entirely.
 
     ═══════════════════════════════════════
-    DIVERSITY IS YOUR #1 OBJECTIVE
+    STEP 0 — THINK FIRST  (mandatory "reasoning" field)
     ═══════════════════════════════════════
-    ● You MUST pick from the edit categories provided below. Each call gives you a DIFFERENT random subset — explore the one you receive fully.
-    ● NEVER default to the "safest" or most obvious edit. If the source is speech, don't just add background noise. If it's music, don't just change genre. Think laterally.
-    ● Combine the chosen edit category with unexpected, specific details — concrete sounds, named places, vivid textures, precise actions.
-    ● Vary your sentence structures, vocabulary, and scene types across calls. Avoid formulaic patterns.
+    Before writing ANYTHING else, you MUST produce an internal monologue in the "reasoning" field:
+      1. **Source Anatomy** — What are the core elements? (voices, instruments, ambience, mood, spatial cues, tempo, genre, language…)
+      2. **Anchor Decision** — Pick exactly ONE thin anchor to preserve (e.g., "the male voice timbre", "the 120 BPM pulse", "the reverberant space"). Everything else is fair game for radical change.
+      3. **Transformation Vision** — Describe in 2-3 sentences the wildly different scene you will create. Be specific: what new layers, participants, textures, and interactions will appear? The target scene should be COMPLEX — multiple simultaneous sound sources interacting.
+      4. **Domain Crossing** — Explicitly state whether the target crosses into a different audio domain (speech→music, sound→speech+music, music→environmental soundscape, etc.). Cross-domain jumps are STRONGLY encouraged.
+
+    ═══════════════════════════════════════
+    RADICAL CREATIVITY IS YOUR #1 OBJECTIVE
+    ═══════════════════════════════════════
+    ● Source = speech?  → Don't just add background noise. Turn the reader into a lead vocalist with a gospel choir and a brass section. Or place the monologue inside a nature documentary narrated over whale song and ice cracking.
+    ● Source = music?   → Don't just swap genre. Dissolve the band into a bustling Tokyo fish market at dawn with vendors shouting prices over a distant temple bell and forklift beeps.
+    ● Source = sound?   → Don't just change location. Transform a ticking clock into a full rhythmic composition: the tick becomes a hi-hat, a dripping faucet adds the kick, a creaking floorboard becomes the bassline, and a child hums a melody over it.
+    ● ALWAYS aim for multi-layered scenes with at least 3 distinct sonic elements interacting.
+    ● Combine the chosen edit category with unexpected, hyper-specific details — concrete sounds, named places, vivid textures, precise actions, emotional arcs.
 
     ═══════════════════════════════════════
     CREATIVE EDIT RULES
     ═══════════════════════════════════════
-    ● Be INVENTIVE and SPECIFIC. "Add rain" is boring. "The crack of a single thunderclap, then fat raindrops hit a tin awning while a stray cat scrambles underneath" is interesting.
-    ● Keep at least ONE recognisable anchor from the source (a voice, a rhythm, a spatial detail, a mood thread) so the edit feels grounded, not random.
-    ● The result must describe a physically plausible audio scene.
+    ● The transformation should be DRAMATIC, not incremental. Think "reimagine" not "tweak".
+    ● "Add rain" is lazy. "Fat monsoon drops hammer a corrugated tin roof while a woman inside sings a lullaby to a restless baby, her voice almost drowned out by a sudden rockslide of thunder" is what we want.
+    ● Preserve exactly ONE recognisable anchor from the source so the edit feels grounded, not random. Everything else: go wild.
+    ● Cross-domain edits are PREFERRED: speech→music scene, music→environmental soundscape, single instrument→full ensemble with vocalists, ambient sound→a narrative scene with dialogue.
+    ● The result must describe a physically plausible audio scene (no impossible physics, but surreal/artistic scenes are fine).
 
     ═══════════════════════════════════════
     edit_prompt RULES
     ═══════════════════════════════════════
-    ● Conversational and human — like a real user casually requesting an edit.
-    ● Vary phrasing freely. Some examples of tone:
-      - "What if this was happening on a submarine?"
-      - "Turn this into something that sounds like a 1970s cop show."
-      - "I want to feel like I'm eavesdropping from the next room."
-      - "Make her sound furious instead of calm."
-      - "Can you add the chaos of a food market around this?"
+    ● Conversational and human — like a creative director briefing a sound designer.
+    ● Must be RICH and SPECIFIC — not vague. Describe the transformation you want in vivid detail.
+    ● Vary phrasing freely. Examples of tone and specificity:
+      - "Strip away everything except his voice, then rebuild the whole thing as a gospel arrangement — I want a full choir doing call-and-response, a Hammond B3 organ swelling underneath, and hand-claps on the backbeat."
+      - "Imagine this is playing inside a submarine. I want the metallic echo of the hull, sonar pings in the distance, and the muffled rush of water pressure all around."
+      - "Turn the solo piano into a full Afrobeat ensemble — talking drums, a horn section playing staccato riffs, a bassist locking in with the drummer, and a crowd chanting along."
+      - "I want this to sound like a memory — the original audio playing from a cheap radio in a sunlit kitchen, mixed with the clinking of coffee cups, a cat purring on the windowsill, and someone humming along."
     ● If speech or lyrics exist, include quotations VERBATIM when relevant.
-    ● Max 30 words (excluding quoted speech/lyrics).
 
     ═══════════════════════════════════════
     target_caption RULES
     ═══════════════════════════════════════
-    ● Must be a standalone, natural audio description — NEVER mention editing, transforming, or modifying.
-    ● Writing style MUST closely match the source caption's tone, sentence structure, and detail level.
-    ● If style exemplars are provided, match their register.
-    ● Similar length to the source caption (±20%).
-    ● Integrate the edit seamlessly — the result reads like an original scene.
+    ● Must be a standalone, natural audio description — NEVER mention editing, transforming, modifying, or the source.
+    ● **Structure**: The target caption MUST follow the SAME multi-paragraph analytical structure as the provided Style References. Match their paragraph organization, level of technical detail, and descriptive depth. Do NOT mimic the source caption's structure — the Style References are your formatting authority.
+    ● **Richness**: The target MUST be a rich, multi-paragraph description with:
+      - Paragraph 1: Opening — what hits the listener first, the dominant sonic event
+      - Middle paragraphs: Layer-by-layer breakdown of all sound sources, their interactions, spatial placement, and temporal evolution
+      - Final paragraph: Overall mood, genre/cultural context, production quality assessment
+    ● **Complexity**: Describe a COMPLEX scene with multiple interacting elements. Simple single-layer descriptions are NOT acceptable.
+    ● **Length**: Match the detail level and length of the Style References, NOT the source caption. A 2-sentence source should still produce a multi-paragraph target if the Style References are multi-paragraph.
     ● Speech/lyrics must appear VERBATIM in the caption.
+    ● Integrate ALL elements from your edit_prompt seamlessly — every sonic detail you promised must appear in the target.
 
     ═══════════════════════════════════════
-    FORMAT EXAMPLES (showing structure only — do NOT reuse these scenes)
+    FORMAT EXAMPLES (showing the SCALE of transformation expected)
     ═══════════════════════════════════════
-    ● Source: "A man reads aloud in a quiet room."
-      → {"edit_type": "scene_transform", "edit_prompt": "What if he's reading on a wind-battered rooftop?", "target_caption": "A man reads aloud on a rooftop; gusts snap at his pages while traffic hums far below and a helicopter chops overhead."}
+    ● Source: "A man reads a book aloud in a quiet room."
+      → {"reasoning": "Source anatomy: single male voice, quiet room ambience, speech domain. Anchor: the male voice timbre and his reading cadence. Transformation: the man becomes the lead vocalist, and I'll build an entire choral-orchestral scene around him. Domain cross: speech → music + speech.", "edit_type": "activity_shift", "edit_prompt": "Turn the man into a lead vocalist. I want him singing the words instead of reading them, with a full choir doing harmonies behind him, acoustic guitar fingerpicking a gentle pattern, and a cello adding a warm low drone. Make it feel like a candlelit chapel performance.", "target_caption": "The audio opens with a solo male voice, warm and resonant, singing in a measured, storytelling cadence that suggests lyrics drawn from prose. His tone is intimate, placed close to the microphone with a slight natural reverb that hints at a stone-walled interior.\n\nWithin the first few seconds, a choir of mixed voices enters softly beneath him — four or five singers sustaining open vowel harmonies in a slow, hymn-like progression. Their voices bloom gradually, panned wide across the stereo field, creating a sense of enveloping warmth. An acoustic guitar, fingerpicked in a delicate arpeggiated pattern, threads through the midrange, its nylon strings producing a mellow, rounded tone that complements the vocal textures without competing.\n\nA solo cello enters in the lower register, bowing a sustained drone that shifts subtly between two notes, adding gravity and emotional depth to the arrangement. The interplay between the lead voice, choir, guitar, and cello is carefully balanced — each occupying a distinct frequency and spatial niche.\n\nThe overall mood is contemplative and devotional, evoking the atmosphere of a candlelit chapel performance. The production is clean and intimate, with minimal processing beyond natural room reverb. The arrangement feels acoustic and organic, prioritizing emotional immediacy over technical complexity."}
 
-    ● Source: "Birds chirping in a forest."
-      → {"edit_type": "tension_arc", "edit_prompt": "Make it feel like something is approaching.", "target_caption": "Birds chirp in a forest, but one by one they fall silent; heavy footsteps crunch through underbrush, growing closer with each step."}
+    ● Source: "A solo piano plays a gentle classical melody in a concert hall."
+      → {"reasoning": "Source anatomy: solo piano, classical genre, concert hall reverb, gentle tempo. Anchor: the melodic contour of the piano. Transformation: dissolve the piano into a bustling street market soundscape where the melody persists as a distant radio playing from a vendor's stall. Domain cross: music → environmental soundscape + embedded music.", "edit_type": "location_teleport", "edit_prompt": "I want to hear this piano melody as if it's leaking from a tinny radio at a crowded Marrakech souk — vendors haggling in Arabic and French, the clatter of copper pots, a donkey braying somewhere, spice-scented wind you can almost hear, and the call to prayer beginning faintly in the distance.", "target_caption": "The clip opens with the dense, layered ambience of an open-air market — dozens of overlapping voices form a continuous murmur, punctuated by sharp bursts of animated haggling in Arabic with occasional French phrases. Metal utensils clang against copper cookware at a nearby stall, producing bright, ringing impacts that cut through the vocal wash.\n\nBeneath the market bustle, a small radio perched on a wooden crate emits a gentle classical piano melody, its tone thinned and slightly distorted by the speaker's limited frequency response. The melody is lyrical and unhurried, tracing a delicate arc that contrasts with the frenetic commercial energy surrounding it. The radio signal crackles faintly during louder market moments.\n\nA donkey brays twice in the middle distance — a raw, nasal sound that briefly dominates the scene before subsiding. Footsteps on packed earth vary in rhythm and weight, suggesting a flow of pedestrians moving through narrow passages. Somewhere to the right, a metalworker hammers in a steady, rhythmic pattern.\n\nAs the clip progresses, the distant call to prayer emerges from a minaret — a solo male voice, amplified and reverberant, singing in elongated, ornamented phrases that float above the market noise. The piano melody on the radio continues underneath, creating an unexpected harmonic dialogue between the sacred vocal line and the secular instrumental piece.\n\nThe overall sonic texture is rich and immersive, capturing the layered complexity of a North African marketplace. The recording has a documentary quality — wide stereo imaging with natural depth cues, no artificial compression, and the organic unpredictability of a real location recording."}
 
-    ● Source: "A woman sings a folk ballad with acoustic guitar."
-      → {"edit_type": "era_shift", "edit_prompt": "Give it a wartime 1940s radio vibe.", "target_caption": "A woman's voice crackles through a vintage radio, singing a folk ballad over a gently strummed acoustic guitar; faint static drifts between verses."}
-
-    ● Source: "A clock ticking."
-      → {"edit_type": "comedic_twist", "edit_prompt": "Add something absurd — maybe a cuckoo that's had too much coffee.", "target_caption": "A clock ticks steadily, then a manic cuckoo bursts out six times in rapid succession, pauses, and adds one last apologetic chirp."}
+    ● Source: "Rain falling on leaves."
+      → {"reasoning": "Source anatomy: nature sound, rain, foliage, no voices or music. Anchor: the rain texture. Transformation: build a full jazz-lounge scene using the rain as atmospheric backdrop — add a jazz trio, a female vocalist, clinking glasses, and bar ambience. Domain cross: environmental sound → music + environmental.", "edit_type": "element_addition", "edit_prompt": "Build a late-night jazz bar around this rain. I want a smoky female vocal singing something slow and aching, a stand-up bass plucking walking lines, brushed drums keeping time, and the rain heard through a half-open window. Add the clink of whiskey glasses and low conversation.", "target_caption": "Rain patters steadily against broad leaves outside a half-open window, its rhythm irregular and organic — a continuous wash of soft, high-frequency texture that serves as the ambient foundation of the scene. Occasional heavier drops strike what sounds like a metal window frame, adding sporadic bright accents.\n\nInside, a female vocalist delivers a slow, torch-song-style performance. Her voice is smoky and controlled, sitting in the alto range with a slight vibrato that intensifies on sustained notes. She phrases behind the beat, lending a languid, melancholic quality to the melody. A subtle room reverb places her a few feet from the microphone in what sounds like a small, acoustically warm space.\n\nA stand-up bass provides the harmonic foundation, its strings plucked in a classic walking-bass pattern — each note round and woody with a satisfying low-end thump. The bassist occasionally slides between notes, adding expressive portamento. Brushed drums maintain a gentle swing feel, the wire brushes circling on the snare head in continuous, whispery arcs with understated kick-drum accents on beats one and three.\n\nIn the background, the ambient layer of a bar quietly unfolds: the crystalline clink of glass against glass, ice cubes shifting in tumblers, a low murmur of conversation just below intelligibility, and the occasional soft scrape of a chair on a wooden floor.\n\nThe overall mood is intimate and bittersweet — a rain-soaked late-night jazz performance in a small, dimly-lit venue. The mix balances the interior music and bar sounds with the exterior rain, creating a three-layer depth (rain → bar ambience → vocal/trio) that feels cinematic in its spatial construction. The recording quality is warm and analog-flavored, with a gentle roll-off above 12 kHz that suggests either vintage equipment or deliberate post-processing."}
 
     Output ONLY valid JSON — nothing else:
-    {"edit_type": "<category>", "edit_prompt": "<natural user request>", "target_caption": "<new complete audio description>"}
+    {"reasoning": "<your internal monologue>", "edit_type": "<category>", "edit_prompt": "<rich, specific user request>", "target_caption": "<new complete multi-paragraph audio description>"}
 
   user_prompt: |-
     ## Source Audio Description:
     {{ source_caption }}
     {% if style_exemplars %}
 
-    ## Writing Style References (match this tone and detail level):
+    ## Style References (YOUR target_caption MUST match this paragraph structure, analytical depth, and detail level):
     {% for ex in style_exemplars %}
-    [{{ loop.index }}] {{ ex }}
+    --- Reference [{{ loop.index }}] ---
+    {{ ex }}
     {% endfor %}
     {% endif %}
 
-    ## Your Edit Category Options (pick ONE — these are randomly sampled for you, explore them fully):
+    ## Your Edit Category Options (pick ONE — these are randomly sampled for you):
     {{ edit_types }}
 
-    IMPORTANT: Pick whichever category leads to the MOST SURPRISING and VIVID transformation for this specific source. Do NOT pick the most "obvious" match.
+    ═══════════════════════════════════════
+    REMINDERS BEFORE YOU WRITE:
+    ═══════════════════════════════════════
+    1. START with "reasoning" — explicitly state your anchor (what to keep) and your radical vision (what to change/add).
+    2. Cross-domain transformations are PREFERRED (speech↔music↔sound↔mixed).
+    3. Your target_caption MUST be multi-paragraph, matching the Style References in structure and depth — NOT the source's structure.
+    4. Aim for 3+ distinct sonic layers interacting in the target scene.
+    5. Be HYPER-SPECIFIC: name instruments, describe timbres, specify spatial placement, detail temporal evolution.
 
     ## Output valid JSON only:
-    {"edit_type": "<category>", "edit_prompt": "<natural user request>", "target_caption": "<new complete audio description>"}
+    {"reasoning": "<internal monologue>", "edit_type": "<category>", "edit_prompt": "<rich specific request>", "target_caption": "<multi-paragraph audio description>"}
 
 # ==========================================
 # Judge Params
@@ -167,29 +187,34 @@ judge_params:
     ═══════════════════════════════════════
     EVALUATION CRITERIA
     ═══════════════════════════════════════
-    1. EDIT FIDELITY — Does the target actually reflect the requested edit?
-    2. CREATIVITY — Is the change interesting, not trivially obvious or minimal?
-    3. COHERENCE — Does the target read as a natural, self-contained audio scene (no editing jargon, no meta-language)?
-    4. STYLE MATCH — Does the target's writing style (tone, detail level, sentence length) match the source?
-    5. ANCHOR — Is at least one recognisable element from the source preserved?
-    6. PLAUSIBILITY — Could this audio scene physically exist (no impossible physics)?
-    7. SPEECH / LYRICS — If quoted text is involved, is it handled correctly (kept verbatim or intentionally rewritten)?
+    1. EDIT FIDELITY — Does the target faithfully realize ALL specific elements requested in the edit prompt? Every instrument, voice, texture, and spatial detail mentioned in the edit must appear in the target.
+    2. CREATIVITY & AMBITION — Is the transformation dramatic and multi-layered? Trivial changes (e.g., just adding background noise, swapping one word) should be rejected.
+    3. COHERENCE — Does the target read as a natural, self-contained audio scene description? No editing jargon, no meta-language, no references to the source.
+    4. RICHNESS — Is the target multi-paragraph with detailed layer-by-layer descriptions of sonic elements, their interactions, spatial placement, and temporal evolution? Thin, single-paragraph targets should be rejected.
+    5. ANCHOR — Is at least one recognisable element from the source preserved (a voice quality, a rhythmic pattern, a spatial cue, a mood thread)?
+    6. PLAUSIBILITY — Could this audio scene physically exist? (Surreal/artistic scenes are acceptable; impossible physics is not.)
+    7. SPEECH / LYRICS — If quoted text is involved, is it handled correctly (kept verbatim or intentionally rewritten as the edit demands)?
 
     ═══════════════════════════════════════
-    ALLOWED (do NOT penalise)
+    ALLOWED & ENCOURAGED (do NOT penalise)
     ═══════════════════════════════════════
-    - Dramatic scene changes (expected for creative edits)
-    - Complete re-imagining of setting, mood, or genre
+    - Dramatic, radical scene changes — this is EXPECTED
+    - Cross-domain transformations (speech→music scene, sound→narrative with dialogue, etc.)
+    - Complete re-imagining of setting, mood, genre, or participants
+    - Target being MUCH longer or more detailed than the source — the target should match style-reference quality, not source length
+    - Different paragraph structure from the source — structure should be analytical and multi-layered regardless of source format
     - Removal of major source elements IF the edit demands it
 
     ═══════════════════════════════════════
     REJECT if
     ═══════════════════════════════════════
-    - Target contains editing meta-language ("the background was replaced …", "we added …")
-    - Writing style is wildly different from the source (e.g., source = 2 sentences, target = a paragraph)
-    - Scene is incoherent or physically impossible
+    - Target contains editing meta-language ("the background was replaced …", "we added …", "the original audio was transformed …")
+    - Target is thin or lazy — fewer than 3 paragraphs, or lacks specific sonic details (timbres, spatial cues, temporal evolution)
+    - Scene is incoherent or physically impossible (not merely surreal)
     - Zero connection to the source remains (no anchor at all)
     - Target simply paraphrases the source with no meaningful change
+    - Edit prompt is vague or generic (e.g., "make it different", "add some sounds") without specific sonic vision
+    - Promised elements in the edit prompt are MISSING from the target caption
 
     Return strict JSON only:
     {"valid": true/false, "reason": "Concise explanation (max 50 words)"}
@@ -203,6 +228,13 @@ judge_params:
 
     ## Target Caption:
     {{ target_caption }}
+
+    ## Evaluation Checklist:
+    1. Does the target realize EVERY specific element from the edit request?
+    2. Is the transformation dramatic (not just a minor tweak)?
+    3. Is the target multi-paragraph with rich sonic detail?
+    4. Is at least one anchor from the source preserved?
+    5. Is the scene coherent and plausible?
 
     ## Return strict JSON only:
     {"valid": true/false, "reason": "Concise explanation"}
