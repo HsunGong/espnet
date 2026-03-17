@@ -6,18 +6,17 @@
 
 import argparse
 import logging
+import shutil
 import sys
+import os
 from pathlib import Path
 
-import deepspeed
 import torch
 import wandb
 import yaml
 
 from espnet2.speechlm.dataloader.iterator import DataIteratorFactory
 from espnet2.speechlm.model import _all_job_types
-from espnet2.speechlm.trainer.deepspeed_trainer import DeepSpeedTrainer
-from espnet2.speechlm.utils.model_summary import model_summary
 
 
 def get_parser() -> argparse.ArgumentParser:
@@ -51,7 +50,7 @@ def get_parser() -> argparse.ArgumentParser:
         help="Directory to save checkpoints and logs",
     )
     train_group.add_argument(
-        "--resume_path",
+        "--resume-path",
         type=Path,
         default=None,
         help="Path to checkpoint to resume training from",
@@ -101,6 +100,12 @@ def get_parser() -> argparse.ArgumentParser:
         required=True,
         help="The folder of length statistics",
     )
+    data_group.add_argument(
+        "--save-loader-state",
+        action="store_true",
+        default=False,
+        help="Whether to save the loader state for resuming training",
+    )
 
     # Logging configuration
     log_group = parser.add_argument_group("Logging")
@@ -112,9 +117,20 @@ def get_parser() -> argparse.ArgumentParser:
         help="Logging level",
     )
 
-    # Wandb configuration (mandatory local/offline logging)
-    wandb_group = parser.add_argument_group(
-        "Weights & Biases (Mandatory Local Logging)"
+    # Wandb configuration
+    wandb_group = parser.add_argument_group("Weights & Biases Configuration")
+    wandb_group.add_argument(
+        "--wandb-mode",
+        type=str,
+        default="online",
+        choices=["online", "offline", "disabled"],
+        help="Wandb logging mode (online=sync to cloud, offline=local only)",
+    )
+    wandb_group.add_argument(
+        "--wandb-project",
+        type=str,
+        default="speechlm",
+        help="Project name for wandb",
     )
     wandb_group.add_argument(
         "--wandb-name",
@@ -139,9 +155,26 @@ def main():
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Load config early to determine trainer type
+    with open(args.train_config, "r") as f:
+        train_config = yaml.safe_load(f)
+
+    trainer_type = train_config.get("trainer", {}).get("type", "deepspeed")
+
     # (1) Setup distributed training first to get rank info
+    # Get local_rank from environment variable (set by torchrun) if not provided via CLI
+    if args.local_rank is None:
+        args.local_rank = int(os.environ.get("LOCAL_RANK", 0))
     torch.cuda.set_device(args.local_rank)
-    deepspeed.init_distributed()
+
+    # Initialize distributed - different approach for each trainer type
+    if trainer_type == "deepspeed":
+        import deepspeed
+        deepspeed.init_distributed()
+    else:
+        # For TorchTitan, use standard PyTorch distributed init
+        if not torch.distributed.is_initialized():
+            torch.distributed.init_process_group(backend="nccl")
 
     assert torch.distributed.is_initialized()
     rank = torch.distributed.get_rank()
@@ -154,7 +187,7 @@ def main():
         "%(levelname)s: %(message)s"
     )
 
-    if rank == 0:
+    if args.local_rank == 0:
         log_level = args.log_level
     else:
         log_level = "CRITICAL"
@@ -170,13 +203,18 @@ def main():
     logger.info(f"World size: {world_size}")
     logger.info(f"Output directory: {args.output_dir}")
 
-    # (3) Initialize job template
-    with open(args.train_config, "r") as f:
-        train_config = yaml.safe_load(f)
+    # (3) Initialize job template (config already loaded above for trainer type detection)
     logger.info(f"Loaded training config from: {args.train_config}")
+    logger.info(f"Using trainer type: {trainer_type}")
+
+    # Copy train config to output directory for reproducibility
+    if rank == 0:
+        config_dest = args.output_dir / "train.yaml"
+        shutil.copy(args.train_config, config_dest)
+        logger.info(f"Copied training config to: {config_dest}")
 
     job_template_class = _all_job_types[train_config["job_type"]]
-    job_template = job_template_class(train_config)
+    job_template = job_template_class(train_config, is_train=True)
 
     # (4) build data iterator factory
     loading_config = train_config["data_loading"]
@@ -197,6 +235,7 @@ def main():
         rank=rank,
         world_size=world_size,
         shuffle=True,
+        save_loader_state=args.save_loader_state,
         seed=loading_config["seed"],
     )
 
@@ -223,10 +262,8 @@ def main():
 
     # (5) build model
     model = job_template.build_model()
-    message = model_summary(model)
-    logger.info(message)
 
-    # (6) Initialize wandb: on rank 0 GPU; offline mode.
+    # (6) Initialize wandb: on rank 0 GPU
     wandb_name = args.wandb_name or f"run_{args.output_dir.name}"
     if rank == 0:
         wandb_argument_record = {
@@ -234,8 +271,8 @@ def main():
             "train_config": train_config,
         }
         wandb.init(
-            mode="offline",
-            project="local",
+            mode=args.wandb_mode,
+            project=args.wandb_project,
             name=wandb_name,
             config=wandb_argument_record,
             tags=args.wandb_tags,
@@ -244,10 +281,13 @@ def main():
         )
     else:
         wandb.init(mode="disabled")
-    logger.info(f"wandb initialization: name={wandb_name}")
+    logger.info(
+        f"wandb initialization: mode={args.wandb_mode}, "
+        f"project={args.wandb_project}, name={wandb_name}"
+    )
 
-    # (7) Initialize DeepSpeed trainer and train
-    trainer = DeepSpeedTrainer(
+    # (7) Initialize trainer and train
+    trainer_kwargs = dict(
         train_data_factory=train_iterator_factory,
         valid_data_factories=valid_iterator_factories,
         model=model,
@@ -255,6 +295,19 @@ def main():
         output_dir=args.output_dir,
         trainer_args=train_config["trainer"],
     )
+
+    if trainer_type == "deepspeed":
+        from espnet2.speechlm.trainer.deepspeed_trainer import DeepSpeedTrainer
+        trainer = DeepSpeedTrainer(**trainer_kwargs)
+    elif trainer_type == "titan":
+        from espnet2.speechlm.trainer.titan_trainer import TitanTrainer
+        trainer = TitanTrainer(**trainer_kwargs)
+    else:
+        raise ValueError(
+            f"Unknown trainer type: {trainer_type}. "
+            f"Supported types: 'deepspeed', 'titan'"
+        )
+
     trainer.run()
     wandb.finish()
 

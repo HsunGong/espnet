@@ -1,1 +1,1 @@
-../../TEMPLATE/speechlm1/path.sh
+../..//TEMPLATE/speechlm1/path.sh
