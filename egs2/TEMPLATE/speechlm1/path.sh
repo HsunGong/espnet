@@ -44,18 +44,19 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export ESPNET_DATASET_REGISTRY="/mnt/home/jinchuat-andr-d6b58f/jinchuat/data/data_jsons/opuslm_v2.yaml:/mnt/home/jinchuat-andr-d6b58f/jinchuat/espnet_sft/egs2/opuslm_v2/speechlm1/data/sft.yaml"
 
 export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:./data/debug.yaml"
-export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:/mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/part2_4/debug/data.yaml"
-export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:/mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/part2_4/full/data.yaml"
+export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:data/part2_4/debug/data.yaml"
+export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:data/part2_4/full/data.yaml"
+# export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:data/train_clean/audio_edit-v2/dialogues/data.yaml"
+# export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:data/part4/speech_edit-v2/with_audio/dialogues/data.yaml"
 
-
-export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:/mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/test_clean/speech_edit/dialogues/data.yaml"
-export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:/mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/test_clean/audio_edit/dialogues/data.yaml"
-export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:/mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/test_clean/speech_edit-short/dialogues/data.yaml"
-export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:/mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/test_clean/speech_edit-short/dialogues/data.yaml"
-export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:/mnt/home/xungong-andr-1766e0/opuslm_sft/egs2/opuslm_v2/speechlm1/data/test_clean/freeform-edit/dialogues/data.yaml"
+export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:data/test_clean/speech_edit/dialogues/data.yaml"
+# export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:data/test_clean/audio_edit/dialogues/data.yaml"
+# export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:data/test_clean/speech_edit-short/dialogues/data.yaml"
+export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:data/test_clean/freeform-edit/dialogues/data.yaml"
+export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:data/test_clean/freeform-edit-v2/dialogues/data.yaml"
 
 export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:data/test_clean/audio_edit-v2/dialogues/data.yaml"
-export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:data/train_clean/audio_edit-v2/dialogues/data.yaml"
-export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:data/part4/speech_edit-v2/with_audio/dialogues/data.yaml"
+export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:data/test_clean/speech_edit-v2/dialogues/data.yaml"
+export ESPNET_DATASET_REGISTRY="${ESPNET_DATASET_REGISTRY}:data/test_clean/speech_edit-v2-fixed/dialogues/data.yaml"
 
 # source path.sh && python local_anal/count_dataset_samples.py
