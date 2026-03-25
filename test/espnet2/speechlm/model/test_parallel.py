@@ -240,6 +240,24 @@ def parallel_model(model_components):
     return model
 
 
+@pytest.fixture
+def prefix_parallel_model(model_components):
+    """Build a prefix-aware ParallelLLM model using mock architecture."""
+    from espnet2.speechlm.model.speechlm.lm.parallel import (
+        build_parallel_hf_decode_with_prefix_class,
+    )
+
+    multimodal_io, vocab, intervals = model_components
+    cls = build_parallel_hf_decode_with_prefix_class("mock-model")
+    model = cls.from_pretrained(
+        "mock-model",
+        multimodal_io=multimodal_io,
+        vocab=vocab,
+        vocab_intervals=intervals,
+    )
+    return model
+
+
 # ---------------------------------------------------------------------------
 # build_parallel_hf_class
 # ---------------------------------------------------------------------------
@@ -259,6 +277,16 @@ class TestBuildParallelHFClass:
 
         cls = build_parallel_hf_class("mock-model")
         assert issubclass(cls, _MockHFModel)
+
+    def test_prefix_builder_returns_subclass(self):
+        from espnet2.speechlm.model.speechlm.lm.parallel import (
+            build_parallel_hf_class,
+            build_parallel_hf_decode_with_prefix_class,
+        )
+
+        base_cls = build_parallel_hf_class("mock-model")
+        prefix_cls = build_parallel_hf_decode_with_prefix_class("mock-model")
+        assert issubclass(prefix_cls, base_cls)
 
 
 # ---------------------------------------------------------------------------
@@ -482,6 +510,25 @@ class TestPrepareInference:
             1,
             parallel_model.num_stream,
         )
+
+    def test_prefix_prepare_inference_unmasks_eos(self, parallel_model, prefix_parallel_model):
+        parallel_model.prepare_inference()
+        prefix_parallel_model.prepare_inference()
+        assert parallel_model.audio_mask[0, 0, 0, parallel_model.eos_token_id]
+        assert not prefix_parallel_model.audio_mask[
+            0, 0, 0, prefix_parallel_model.eos_token_id
+        ]
+
+
+class TestPrefixContinuation:
+    def test_resolve_continuation_context(self, prefix_parallel_model):
+        prefix_parallel_model.prepare_inference()
+        seq = torch.zeros(1, 6, prefix_parallel_model.num_stream, dtype=torch.long)
+        seq[0, 1, 0] = prefix_parallel_model.vocab.index("<|assistant|>")
+        seq[0, 2, 0] = prefix_parallel_model.vocab.index("<|audio|>")
+
+        context = prefix_parallel_model._resolve_continuation_context(seq)
+        assert context == ("audio", "discrete_audio", 3)
 
 
 # ---------------------------------------------------------------------------

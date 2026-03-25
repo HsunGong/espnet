@@ -520,3 +520,198 @@ class SpeechLMPreprocessor:
         conti_feats = [feat for feat in conti_feats if feat[0] == self.audio_output]
 
         return seq, loss_masks, conti_feats
+
+
+class SpeechLMPreprocessorDecodeWithPrefix(SpeechLMPreprocessor):
+    """Inference preprocessor that keeps the last assistant segment as prefix."""
+
+    def __init__(
+        self,
+        *args,
+        add_generation_prompt: bool = False,
+        continuation_prefix_ratio: float = 0.5,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.add_generation_prompt = add_generation_prompt
+        self.continuation_prefix_ratio = continuation_prefix_ratio
+
+    def find_length(self, key, data_dict):
+        task, _, _ = key
+        messages = self._apply_chat_template(task, data_dict)
+
+        length = 1
+        for idx, (_, this_io, this_data) in enumerate(messages):
+            length += 2
+            length += self._segment_length(this_io, this_data, idx == len(messages) - 1)
+            if self._should_append_end_token(idx, len(messages)):
+                length += 1
+
+        return length
+
+    def preprocessing(self, key, data_dict):
+        task, _, _ = key
+        messages = self._apply_chat_template(task, data_dict)
+
+        seq = [self.special_token("<|bos|>")]
+        conti_feats = list()
+        loss_masks = [self.special_mask(0.0)]
+        accum_length = 1
+
+        apply_eots = [
+            msg1[0] == msg2[0] for msg1, msg2 in zip(messages[:-1], messages[1:])
+        ] + [False]
+        for msg_idx, (apply_eot, (role, this_io, this_data)) in enumerate(
+            zip(apply_eots, messages)
+        ):
+            apply_loss = float(role == "assistant" or self.loss_region == "all")
+            special_mask = self.special_mask(apply_loss)
+
+            seq.append(self.special_token(f"<|{role}|>"))
+            loss_masks.append(special_mask)
+
+            modality = self.multimodal_io[this_io].modality
+            seq.append(self.special_token(f"<|{modality}|>"))
+            loss_masks.append(special_mask)
+            accum_length += 2
+
+            this_seq, conti_feat, loss_mask = self.multimodal_io[this_io].preprocess(
+                this_data
+            )
+            assert this_seq.shape == loss_mask.shape
+
+            is_last_msg = msg_idx == len(messages) - 1
+            if is_last_msg:
+                this_seq, conti_feat, loss_mask = self._truncate_last_prefix_segment(
+                    this_io, this_seq, conti_feat, loss_mask
+                )
+
+            if self.multimodal_io[this_io].is_discrete:
+                modality_bias = self.vocab_intervals[this_io][0][0]
+                this_seq = np.where(
+                    this_seq == self.pad_id, self.pad_id, this_seq + modality_bias
+                )
+            if this_seq.shape[1] < self.num_stream:
+                pad_size = self.num_stream - this_seq.shape[1]
+                this_seq = np.pad(this_seq, ((0, 0), (0, pad_size)))
+            seq.append(this_seq)
+
+            if conti_feat is not None:
+                length, feat = conti_feat
+                conti_feats.append((this_io, accum_length, length, feat))
+
+            if loss_mask.shape[1] < self.num_stream:
+                pad_size = self.num_stream - loss_mask.shape[1]
+                loss_mask = np.pad(loss_mask, ((0, 0), (0, pad_size)))
+            loss_masks.append(loss_mask * apply_loss)
+            accum_length += this_seq.shape[0]
+
+            if apply_eot:
+                seq.append(self.special_token("<|eot|>"))
+                loss_masks.append(special_mask)
+                accum_length += 1
+            elif self._should_append_end_token(msg_idx, len(messages)):
+                seq.append(self.special_token("<|eos|>"))
+                loss_masks.append(special_mask)
+                accum_length += 1
+
+        seq = np.concatenate(seq, axis=0)
+        loss_mask = np.concatenate(loss_masks, axis=0)
+        return {
+            "sequence": seq,
+            "conti_feats": conti_feats,
+            "loss_mask": loss_mask,
+        }
+
+    def _apply_chat_template(self, task, data_dict):
+        if self.add_generation_prompt:
+            return super()._apply_chat_template(task, data_dict)
+
+        if "dialogue" in data_dict:
+            if len(data_dict) != 1:
+                raise ValueError(
+                    "If dialogue exist, there should be no more other entries"
+                )
+            messages = list()
+            for msg in data_dict["dialogue"]:
+                if msg[1] == "text":
+                    this_io = "text"
+                elif msg[1] == "audio":
+                    if msg[0] == "user" or msg[0] == "system":
+                        this_io = self.audio_input
+                    else:
+                        this_io = self.audio_output
+                else:
+                    raise ValueError(f"Not supported modality in dialogue: {msg[1]}")
+                messages.append((msg[0], this_io, msg[2]))
+            return messages
+
+        task_config = SPEECHLM_TASK_CONFIGS[task]
+        messages = list()
+        for role, entry in task_config:
+            if bool(re.match(r"^audio", entry)):
+                if role == "user" or role == "system":
+                    this_io = self.audio_input
+                else:
+                    this_io = self.audio_output
+            elif bool(re.match(r"^text", entry)):
+                this_io = "text"
+            else:
+                raise ValueError(f"Not supported data entry in template: {entry}")
+
+            messages.append((role, this_io, data_dict[entry]))
+
+        return messages
+
+    def _segment_length(self, this_io, this_data, is_last_msg):
+        length = self.multimodal_io[this_io].find_length(this_data)
+        if not is_last_msg:
+            return length
+
+        io = self.multimodal_io[this_io]
+        if not self._is_delay_interleaved_discrete(io):
+            return length
+
+        n_tail = io.num_stream() - 1
+        actual_frames = max(length - n_tail, 1)
+        prefix_frames = max(
+            n_tail + 1,
+            int(actual_frames * self.continuation_prefix_ratio),
+        )
+        return min(prefix_frames, length)
+
+    def _should_append_end_token(self, msg_idx, num_messages):
+        if self.add_generation_prompt:
+            return True
+        return msg_idx != num_messages - 1
+
+    def _truncate_last_prefix_segment(self, this_io, this_seq, conti_feat, loss_mask):
+        io = self.multimodal_io[this_io]
+        if not self._is_delay_interleaved_discrete(io):
+            return this_seq, conti_feat, loss_mask
+
+        n_tail = io.num_stream() - 1
+        total_length = this_seq.shape[0]
+        actual_frames = max(total_length - n_tail, 1)
+        prefix_frames = max(
+            n_tail + 1,
+            int(actual_frames * self.continuation_prefix_ratio),
+        )
+        prefix_frames = min(prefix_frames, total_length)
+        if prefix_frames >= total_length:
+            return this_seq, conti_feat, loss_mask
+
+        this_seq = this_seq[:prefix_frames]
+        loss_mask = loss_mask[:prefix_frames]
+        if conti_feat is not None:
+            _, feat = conti_feat
+            conti_feat = (prefix_frames, feat)
+        return this_seq, conti_feat, loss_mask
+
+    @staticmethod
+    def _is_delay_interleaved_discrete(io):
+        return (
+            io.is_discrete
+            and hasattr(io, "delay_interleave")
+            and io.delay_interleave
+        )

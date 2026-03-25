@@ -512,7 +512,6 @@ def build_parallel_hf_class(model_hf_tag):
                 # (2.5) Terminate when applicable
                 if len(decoded_sequences) > 1:
                     break  # multi-segment decoding only supports batch size of 1
-
                 elif (
                     decoded_sequences[0][-1, 0] != self.eot_token_id
                     and num_msg >= len(enforce_modalities) - 1
@@ -824,3 +823,447 @@ def build_parallel_hf_class(model_hf_tag):
             return combined_cache
 
     return ParallelLLM
+
+
+def ParallelHFModelDecodeWithPrefix(model_hf_tag, **kwargs):
+    """Factory for the prefix-continuation decoding variant."""
+    model_class = build_parallel_hf_decode_with_prefix_class(model_hf_tag)
+    return model_class.from_pretrained(model_hf_tag, **kwargs)
+
+
+def build_parallel_hf_decode_with_prefix_class(model_hf_tag):
+    """Build a prefix-aware subclass on top of the base dynamic ParallelLLM."""
+
+    ParallelLLM = build_parallel_hf_class(model_hf_tag)
+
+    class ParallelLLMDecodeWithPrefix(ParallelLLM):
+        """ParallelLLM variant that continues from an assistant prefix."""
+
+        @staticmethod
+        def _strip_terminal_token(seq, eos_token_id, eot_token_id):
+            if seq.size(0) == 0:
+                return seq
+            if seq[-1, 0] == eos_token_id or seq[-1, 0] == eot_token_id:
+                return seq[:-1]
+            return seq
+
+        def _resolve_continuation_context(self, input_ids):
+            assistant_token_id = self.vocab.index("<|assistant|>")
+            first_stream = input_ids[0, :, 0]
+            assistant_positions = (
+                first_stream == assistant_token_id
+            ).nonzero(as_tuple=True)[0]
+            if assistant_positions.numel() == 0:
+                return None
+
+            assistant_pos = assistant_positions[-1].item()
+            if assistant_pos + 1 >= input_ids.size(1):
+                return None
+
+            modality_token_id = first_stream[assistant_pos + 1].item()
+            modality_token = self.vocab[modality_token_id]
+            if modality_token not in ("<|audio|>", "<|text|>"):
+                return None
+
+            modality = modality_token.replace("<|", "").replace("|>", "")
+            io_name = "discrete_audio" if modality == "audio" else modality
+            prefix_start = min(assistant_pos + 2, input_ids.size(1))
+            return modality, io_name, prefix_start
+
+        def _get_audio_delay_interleave_params(self):
+            io_name = "discrete_audio"
+            if io_name not in self.multimodal_io_dict:
+                return 0, None
+
+            io = self.multimodal_io_dict[io_name]
+            if not (io.is_discrete and getattr(io, "delay_interleave", False)):
+                return 0, None
+
+            tail_k = max(io.num_stream() - 1, 0)
+            if tail_k == 0:
+                return 0, None
+
+            stream0_pad_token = self.vocab_intervals[io_name][0][0]
+            return tail_k, stream0_pad_token
+
+        def _get_audio_codec_layout(self):
+            io_name = "discrete_audio"
+            if io_name not in self.multimodal_io_dict:
+                return 1, max(self.num_stream - 1, 0)
+
+            io = self.multimodal_io_dict[io_name]
+            codec_start = getattr(io, "ssl_n_streams", 1)
+            codec_num = getattr(io, "codec_n_streams", self.num_stream - codec_start)
+            return codec_start, max(codec_num, 0)
+
+        def _sanitize_interleave_for_decode(self, seq, io_name):
+            if seq.size(0) == 0 or io_name != "discrete_audio":
+                return seq
+
+            _, stream0_pad_token = self._get_audio_delay_interleave_params()
+            if stream0_pad_token is None:
+                return seq
+
+            seq = seq.clone()
+            eos_or_eot = torch.logical_or(
+                seq[:, 0] == self.eos_token_id,
+                seq[:, 0] == self.eot_token_id,
+            )
+            if torch.any(eos_or_eot):
+                seq[eos_or_eot, 0] = stream0_pad_token
+
+            return seq
+
+        @torch.no_grad()
+        def inference(self, inference_config: dict, cache: list = None, **kwargs):
+            add_generation_prompt = inference_config.get("add_generation_prompt", False)
+            if add_generation_prompt:
+                return super().inference(inference_config, cache=cache, **kwargs)
+
+            self.eval()
+
+            input_ids = kwargs.get("seqs").clone()
+            continuation_ctx = self._resolve_continuation_context(input_ids)
+            if continuation_ctx is None:
+                raise RuntimeError(
+                    "Continuation mode requires the last assistant segment in prefill"
+                )
+
+            input_embeds = self._embed(input_ids, kwargs)
+            continuation_tail_steps = 0
+            prefill_input_ids = input_ids
+            prefill_input_embeds = input_embeds
+
+            modality, io_name, prefix_start = continuation_ctx
+            if modality == "audio":
+                tail_k, stream0_pad_token = self._get_audio_delay_interleave_params()
+                if tail_k > 0 and stream0_pad_token is not None:
+                    prefix_tokens = input_ids[:, prefix_start:, :]
+                    continuation_tail_steps = min(tail_k, prefix_tokens.size(1))
+                    if continuation_tail_steps > 0:
+                        safe_prefix_len = prefix_tokens.size(1) - continuation_tail_steps
+                        prefill_len = prefix_start + safe_prefix_len
+                        prefill_input_ids = input_ids[:, :prefill_len, :]
+                        prefill_input_embeds = input_embeds[:, :prefill_len, :]
+
+            logits, cache = self._step(
+                input_embeds=prefill_input_embeds,
+                past_key_values=cache,
+            )
+
+            mask = getattr(self, f"{modality}_mask")
+            prefix_tokens = input_ids[:, prefix_start:, :]
+            prev_token = prefill_input_ids[:, -1:, :]
+
+            delay_interleave_tail_k = 0
+            stream0_tail_pad_token = None
+            if modality == "audio":
+                (
+                    delay_interleave_tail_k,
+                    stream0_tail_pad_token,
+                ) = self._get_audio_delay_interleave_params()
+
+            if (
+                modality == "audio"
+                and delay_interleave_tail_k > 0
+                and continuation_tail_steps > 0
+            ):
+                prefix_tokens = prefix_tokens.clone()
+                safe_prefix_len = prefix_tokens.size(1) - continuation_tail_steps
+                codec_start, codec_num = self._get_audio_codec_layout()
+                teacher_cfg = inference_config[modality].get("cfg", 1)
+                repair_cache = cache
+
+                if teacher_cfg > 1:
+                    repair_cache, _ = self._prepare_cfg_cache(repair_cache)
+
+                for step in range(continuation_tail_steps):
+                    if teacher_cfg > 1:
+                        step_input = prev_token.tile(2, 1, 1)
+                        step_logits, repair_cache = self._step(
+                            input_ids=step_input,
+                            past_key_values=repair_cache,
+                        )
+                        cond_logits, uncond_logits = step_logits.chunk(2)
+                        step_logits = (
+                            cond_logits * teacher_cfg
+                            + uncond_logits * (1 - teacher_cfg)
+                        )
+                        step_logits.masked_fill_(mask, float("-inf"))
+                    else:
+                        step_logits, repair_cache = self._step(
+                            input_ids=prev_token,
+                            past_key_values=repair_cache,
+                            mask=mask,
+                        )
+
+                    sampled_token = self._logits_to_token(
+                        step_logits,
+                        temperature=inference_config[modality]["temperature"],
+                        topk=inference_config[modality]["topk"],
+                    )
+
+                    leaked_codec = max(delay_interleave_tail_k - 1 - step, 0)
+                    leaked_codec = min(leaked_codec, codec_num)
+                    repaired_token = prefix_tokens[
+                        :,
+                        safe_prefix_len + step : safe_prefix_len + step + 1,
+                        :,
+                    ].clone()
+                    if leaked_codec > 0:
+                        left = codec_start
+                        right = min(codec_start + leaked_codec, repaired_token.size(2))
+                        repaired_token[:, :, left:right] = sampled_token[:, :, left:right]
+
+                    prefix_tokens[
+                        :,
+                        safe_prefix_len + step : safe_prefix_len + step + 1,
+                        :,
+                    ] = repaired_token
+                    prev_token = repaired_token
+
+                if teacher_cfg > 1:
+                    last_input = prev_token.tile(2, 1, 1)
+                    last_logits, repair_cache = self._step(
+                        input_ids=last_input,
+                        past_key_values=repair_cache,
+                    )
+                    cond_logits, uncond_logits = last_logits.chunk(2)
+                    last_logits = (
+                        cond_logits * teacher_cfg
+                        + uncond_logits * (1 - teacher_cfg)
+                    )
+                    last_logits.masked_fill_(mask, float("-inf"))
+
+                    indices = torch.arange(prev_token.size(0)).long().to(
+                        prev_token.device
+                    )
+                    repair_cache.batch_select_indices(indices)
+                    cache = repair_cache
+                else:
+                    last_logits, cache = self._step(
+                        input_ids=prev_token,
+                        past_key_values=repair_cache,
+                        mask=mask,
+                    )
+            else:
+                last_logits = logits[:, -1:, :, :].clone()
+                last_logits.masked_fill_(mask, float("-inf"))
+
+            decoded_sequences, cache, _ = self.inference_segment(
+                config=inference_config[modality],
+                cache=cache,
+                prev_token=prev_token,
+                mask=mask,
+                precomputed_logits=last_logits,
+                delay_interleave_tail_k=delay_interleave_tail_k,
+                stream0_tail_pad_token=stream0_tail_pad_token,
+            )
+
+            messages = []
+            io = self.multimodal_io_dict[io_name]
+            modality_offset = self.vocab_intervals[io_name][0][0]
+            if modality == "audio":
+                prefix_for_decode = self._sanitize_interleave_for_decode(
+                    prefix_tokens[0], io_name
+                )
+                prefix_local = prefix_for_decode.unsqueeze(0) - modality_offset
+                prefix_lengths = (
+                    torch.Tensor([prefix_local.size(1)]).long().to(prefix_local.device)
+                )
+                prefix_content = io.decode_batch(prefix_local, prefix_lengths)
+                messages.append(["prefix", modality, prefix_content])
+
+            for seq in decoded_sequences:
+                seq = self._strip_terminal_token(
+                    seq,
+                    eos_token_id=self.eos_token_id,
+                    eot_token_id=self.eot_token_id,
+                )
+
+                combined = torch.cat([prefix_tokens[0], seq], dim=0)
+                if modality == "audio":
+                    combined = self._sanitize_interleave_for_decode(combined, io_name)
+
+                combined = combined.unsqueeze(0) - modality_offset
+                lengths = torch.Tensor([combined.size(1)]).long().to(combined.device)
+                content = io.decode_batch(combined, lengths)
+                messages.append(["assistant", modality, content])
+
+            return messages, cache
+
+        def inference_segment(
+            self,
+            config: dict,
+            cache: list,
+            prev_token: torch.Tensor,
+            mask: torch.Tensor,
+            precomputed_logits: torch.Tensor = None,
+            delay_interleave_tail_k: int = 0,
+            stream0_tail_pad_token: int = None,
+        ):
+            device = prev_token.device
+
+            num_hypo = config.get("num_hypo", 1)
+            if num_hypo > 1:
+                indices = torch.zeros(num_hypo).long().to(device)
+                cache.batch_select_indices(indices)
+                prev_token = prev_token.tile(num_hypo, 1, 1)
+                if precomputed_logits is not None:
+                    precomputed_logits = precomputed_logits.tile(num_hypo, 1, 1, 1)
+
+            cfg = config.get("cfg", 1)
+            if cfg > 1:
+                cache, cfg_logits = self._prepare_cfg_cache(cache)
+                if precomputed_logits is not None:
+                    precomputed_logits = torch.cat(
+                        [precomputed_logits, cfg_logits[:, -1:, :, :]], dim=0
+                    )
+
+            hypos = list()
+            eos_idx = torch.ones(num_hypo).long().to(device) * -1
+            finish_idx = torch.ones(num_hypo).long().to(device) * -1
+            for step in range(config["max_step"]):
+                if cfg > 1:
+                    prev_token = prev_token.tile(2, 1, 1)
+
+                if precomputed_logits is not None:
+                    logits = precomputed_logits
+                    precomputed_logits = None
+                else:
+                    logits, cache = self._step(
+                        input_ids=prev_token, past_key_values=cache, mask=mask
+                    )
+
+                if cfg > 1:
+                    logits, cfg_logits = logits.chunk(2)
+                    logits = logits * cfg + cfg_logits * (1 - cfg)
+                    logits.masked_fill_(mask, float("-inf"))
+
+                min_step = config.get("min_step", 0)
+                if step < min_step:
+                    logits[:, :, 0, self.eot_token_id] = float("-inf")
+                    logits[:, :, 0, self.eos_token_id] = float("-inf")
+
+                sampled_token = self._logits_to_token(
+                    logits,
+                    temperature=config["temperature"],
+                    topk=config["topk"],
+                )
+
+                eos_or_eot = torch.logical_or(
+                    sampled_token[:, 0, 0] == self.eot_token_id,
+                    sampled_token[:, 0, 0] == self.eos_token_id,
+                )
+                new_eos = torch.logical_and(eos_or_eot, eos_idx == -1)
+                eos_idx = torch.where(new_eos, step, eos_idx)
+
+                if delay_interleave_tail_k > 0 and stream0_tail_pad_token is not None:
+                    in_tail = torch.logical_and(eos_idx >= 0, step > eos_idx)
+                    in_tail = torch.logical_and(
+                        in_tail, step <= eos_idx + delay_interleave_tail_k
+                    )
+                    if torch.any(in_tail):
+                        sampled_token[in_tail, 0, 0] = stream0_tail_pad_token
+
+                prev_token = sampled_token
+                hypos.append(sampled_token)
+
+                if delay_interleave_tail_k > 0:
+                    finish_here = torch.logical_and(
+                        eos_idx >= 0,
+                        step >= eos_idx + delay_interleave_tail_k,
+                    )
+                else:
+                    finish_here = eos_idx >= 0
+                finish_here = torch.logical_and(finish_here, finish_idx == -1)
+                finish_idx = torch.where(finish_here, step, finish_idx)
+
+                if torch.all(finish_idx >= 0):
+                    break
+
+            finish_idx = torch.where(finish_idx == -1, step, finish_idx)
+            hypos = torch.cat(hypos, dim=1)
+
+            if cfg > 1:
+                indices = torch.arange(num_hypo).long().to(device)
+                cache.batch_select_indices(indices)
+
+            prev_token[..., 1:] = 0
+            last_logits, cache = self._step(input_ids=prev_token, past_key_values=cache)
+
+            hypo_lst = list()
+            for idx, hypo in zip(finish_idx, hypos):
+                hypo_lst.append(hypo[: idx + 1])
+
+            return hypo_lst, cache, last_logits
+
+        def prepare_inference(self):
+            tokens = ["assistant", "audio", "text", "eos", "eot"]
+            for token in tokens:
+                token_id = self.vocab.index(f"<|{token}|>")
+                token_tensor = torch.zeros((1, 1, self.num_stream)).long()
+                token_tensor[0, 0, 0] = token_id
+                self.register_buffer(f"{token}_token", token_tensor)
+
+            tokens = ["audio", "text", "image", "video", "toolcall"]
+            mask = torch.ones(self.num_stream, len(self.vocab)).bool()
+            for token in tokens:
+                token_id = self.vocab.index(f"<|{token}|>")
+                mask[0, token_id] = False
+            mask[1:, 0] = False
+            mask = mask[None, None, :, :]
+            self.register_buffer("modality_mask", mask)
+
+            self.eot_token_id = self.vocab.index("<|eot|>")
+            self.eos_token_id = self.vocab.index("<|eos|>")
+            for io_name, intervals in self.vocab_intervals.items():
+                mask = torch.ones(self.num_stream, len(self.vocab)).bool()
+                for idx, (start, end) in enumerate(intervals):
+                    mask[idx, start:end] = False
+                for idx in range(len(intervals), self.num_stream):
+                    mask[idx, 0] = False
+                mask[0, self.eot_token_id] = False
+                mask[0, self.eos_token_id] = False
+
+                io_name = "audio" if io_name == "discrete_audio" else io_name
+                mask = mask[None, None, :, :]
+                self.register_buffer(f"{io_name}_mask", mask)
+
+        def _prepare_cfg_cache(self, cache):
+            assert isinstance(cache, DynamicCache)
+
+            device = cache.layers[0].keys.device
+            length = cache.get_seq_length()
+            batch_size = cache.layers[0].keys.shape[0]
+
+            zeros = torch.zeros((batch_size, length, self.num_stream))
+            zeros = zeros.to(device).long()
+
+            cfg_logits, cfg_cache = self._step(input_ids=zeros)
+
+            combined_cache = DynamicCache()
+            for idx in range(len(cache.layers)):
+                key = torch.cat(
+                    [
+                        cache.layers[idx].keys,
+                        cfg_cache.layers[idx].keys,
+                    ],
+                    dim=0,
+                )
+                value = torch.cat(
+                    [
+                        cache.layers[idx].values,
+                        cfg_cache.layers[idx].values,
+                    ],
+                    dim=0,
+                )
+                combined_cache.update(
+                    key_states=key,
+                    value_states=value,
+                    layer_idx=idx,
+                )
+
+            return combined_cache, cfg_logits
+
+    return ParallelLLMDecodeWithPrefix

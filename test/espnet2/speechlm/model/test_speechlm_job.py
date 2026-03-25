@@ -82,6 +82,22 @@ class MockDiscreteAudioIO(AbsIO):
         return torch.zeros(1)
 
 
+class MockDelayInterleaveAudioIO(MockDiscreteAudioIO):
+    """Audio-like IO with delay interleave enabled for continuation tests."""
+
+    def __init__(self):
+        super().__init__()
+        self.delay_interleave = True
+
+    def preprocess(self, data):
+        seq = np.zeros((10, 4), dtype=np.int64)
+        loss_mask = np.ones((10, 4), dtype=np.float32)
+        return seq, None, loss_mask
+
+    def find_length(self, data):
+        return 10
+
+
 class MockContinuousAudioIO(AbsIO):
     """Continuous audio IO (feature-based, not tokenized)."""
 
@@ -359,6 +375,80 @@ class TestApplyChatTemplate:
             # Only user message should be present
             assert len(messages) == 1
             assert messages[0][0] == "user"
+
+
+class TestPrefixPreprocessor:
+    def _build_prefix_preprocessor(self):
+        with patch(
+            "espnet2.speechlm.model.speechlm.speechlm_job._multimodal_ios",
+            {
+                "text": MockDiscreteIO,
+                "discrete_audio": MockDelayInterleaveAudioIO,
+            },
+        ):
+            from espnet2.speechlm.model.speechlm.speechlm_job import (
+                SpeechLMJobTemplate,
+                SpeechLMPreprocessorDecodeWithPrefix,
+            )
+
+            config = _make_config()
+            jt = SpeechLMJobTemplate(config, is_train=False)
+            return SpeechLMPreprocessorDecodeWithPrefix(
+                is_train=False,
+                multimodal_io={
+                    io_name: io.copy_for_worker()
+                    for io_name, io in jt.multimodal_io.items()
+                },
+                vocab=jt.vocab,
+                vocab_intervals=jt.vocab_intervals,
+                audio_input=config["preprocessor"]["audio_input"],
+                audio_output=config["preprocessor"]["audio_output"],
+                loss_region=config["preprocessor"]["loss_region"],
+                add_generation_prompt=False,
+                continuation_prefix_ratio=0.5,
+            )
+
+    def test_chat_template_keeps_last_assistant(self):
+        proc = self._build_prefix_preprocessor()
+        data_dict = {
+            "dialogue": [
+                ("user", "text", "hello"),
+                ("assistant", "text", "hi"),
+            ]
+        }
+        messages = proc._apply_chat_template("text_only", data_dict)
+        assert len(messages) == 2
+        assert messages[-1][0] == "assistant"
+
+    def test_preprocessing_skips_last_eos(self):
+        proc = self._build_prefix_preprocessor()
+        key = ("text_only", "utt_id", "set_name")
+        result = proc.preprocessing(
+            key,
+            {
+                "dialogue": [
+                    ("user", "text", "hello"),
+                    ("assistant", "text", "hi"),
+                ]
+            },
+        )
+        eos_id = proc.vocab.index("<|eos|>")
+        assert result["sequence"][-1, 0] != eos_id
+
+    def test_preprocessing_truncates_delay_interleaved_prefix(self):
+        proc = self._build_prefix_preprocessor()
+        key = ("text_to_audio", "utt_id", "set_name")
+        result = proc.preprocessing(
+            key,
+            {
+                "dialogue": [
+                    ("user", "text", "hello"),
+                    ("assistant", "audio", "/tmp/out.wav"),
+                ]
+            },
+        )
+        # BOS + user(6) + assistant(role+modality=2) + truncated audio(4) = 13
+        assert result["sequence"].shape[0] == 13
 
 
 # ---------------------------------------------------------------------------
